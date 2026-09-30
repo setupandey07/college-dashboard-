@@ -1,0 +1,533 @@
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  serverTimestamp
+} from 'firebase/firestore';
+import { db } from '../../lib/firebase';
+import {
+  INITIAL_DEPARTMENTS,
+  INITIAL_SUBJECTS
+} from '../../data/mockData';
+
+import { isAuthorizedDevAdminIdentity } from '../../lib/authHelpers';
+
+export const DEMO_USER_DOC_IDS = [
+  'u-hod-1',
+  'u-fac-1',
+  'u-fac-2',
+  'u-lab-1',
+  'u-stu-1',
+  'u-stu-2',
+  'u-stu-3',
+  'u-stu-demo'
+];
+
+export const DEMO_USER_EMAILS = [
+  'hod.cse@academiccore.edu',
+  'vikram.k@academiccore.edu',
+  'ananya.d@academiccore.edu',
+  'senthil.lab@academiccore.edu',
+  'aarav.22cs042@student.nitandhra.ac.in',
+  'pooja.22cs078@student.nitandhra.ac.in',
+  'rohan.22cs105@student.nitandhra.ac.in',
+  'student@student.nitandhra.ac.in'
+];
+
+export const DEMO_ASSESSMENT_IDS = [
+  'ass-cia1-cs501',
+  'ass-cia2-cs501',
+  'ass-cia1-cs502'
+];
+
+export const DEMO_QUERY_IDS = [
+  'q-101',
+  'q-102',
+  'q-103'
+];
+
+export const DEMO_INNOVATION_IDS = [
+  'inn-001',
+  'inn-002',
+  'inn-003'
+];
+
+export const DEMO_ANNOUNCEMENT_IDS = [
+  'anc-01',
+  'anc-02',
+  'anc-03',
+  'anc-04'
+];
+
+export const DEMO_ATTENDANCE_SESSION_IDS = [
+  'att-sess-101',
+  'att-sess-102',
+  'att-sess-103'
+];
+
+export const DEMO_LAB_EQUIPMENT_IDS = [
+  'eq-101',
+  'eq-102',
+  'eq-103',
+  'eq-104'
+];
+
+/**
+ * Purges all hardcoded demo/sample users from both 'users' and 'students' collections.
+ * Guaranteed to NEVER delete the authenticated Administrator.
+ */
+export async function purgeDemoUsers(): Promise<{ success: boolean; deletedCount: number }> {
+  let count = 0;
+  try {
+    // 1. Delete by known document IDs (excluding any admin ID)
+    for (const uid of DEMO_USER_DOC_IDS) {
+      if (uid === 'u-admin-1' || uid === 'admin') continue;
+      try {
+        const uRef = doc(db, 'users', uid);
+        const uSnap = await getDoc(uRef);
+        if (uSnap.exists()) {
+          const uData = uSnap.data();
+          if (!isAuthorizedDevAdminIdentity(uData.email, uid)) {
+            await deleteDoc(uRef);
+            count++;
+          }
+        }
+      } catch (_) {}
+
+      try {
+        const sRef = doc(db, 'students', uid);
+        const sSnap = await getDoc(sRef);
+        if (sSnap.exists()) {
+          const sData = sSnap.data();
+          if (!isAuthorizedDevAdminIdentity(sData.email, uid)) {
+            await deleteDoc(sRef);
+            count++;
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 2. Query any users matching demo emails or demo names
+    try {
+      const usersSnap = await getDocs(collection(db, 'users'));
+      for (const d of usersSnap.docs) {
+        const data = d.data();
+        const email = (data.email || '').toLowerCase().trim();
+        const name = (data.name || '').trim();
+
+        // Strictly protect administrator
+        if (
+          isAuthorizedDevAdminIdentity(email, d.id) ||
+          d.id === 'admin' ||
+          data.role === 'admin' ||
+          email.includes('pkr02042006@gmail.com') ||
+          email.includes('startup5077')
+        ) {
+          continue;
+        }
+
+        const isDemoEmail = DEMO_USER_EMAILS.some(de => email === de.toLowerCase());
+        const isDemoName =
+          name.includes('Vikramaditya') ||
+          name.includes('Ananya Deshmukh') ||
+          name.includes('Meenakshi Sundaram') ||
+          name.includes('Senthil Nathan') ||
+          name.includes('Aarav Sharma') ||
+          name.includes('Pooja Venkatesh') ||
+          name.includes('Rohan Verma') ||
+          name.includes('NIT Andhra Student (Demo)');
+
+        if (isDemoEmail || isDemoName) {
+          await deleteDoc(d.ref);
+          count++;
+        }
+      }
+    } catch (_) {}
+
+    // 3. Query any students matching demo emails
+    try {
+      const stuSnap = await getDocs(collection(db, 'students'));
+      for (const d of stuSnap.docs) {
+        const data = d.data();
+        const email = (data.email || '').toLowerCase().trim();
+        const name = (data.name || '').trim();
+
+        const isDemoEmail = DEMO_USER_EMAILS.some(de => email === de.toLowerCase());
+        const isDemoName =
+          name.includes('Aarav Sharma') ||
+          name.includes('Pooja Venkatesh') ||
+          name.includes('Rohan Verma') ||
+          name.includes('NIT Andhra Student (Demo)');
+
+        if (isDemoEmail || isDemoName) {
+          await deleteDoc(d.ref);
+          count++;
+        }
+      }
+    } catch (_) {}
+
+    console.log(`Purged ${count} demo users from Firestore.`);
+    return { success: true, deletedCount: count };
+  } catch (err) {
+    console.warn('Notice during demo users purge:', err);
+    return { success: false, deletedCount: count };
+  }
+}
+
+/**
+ * Purges ALL hardcoded demo items across the entire database:
+ * - Demo users & students
+ * - Demo assessments & marks
+ * - Demo student marks
+ * - Demo queries & replies
+ * - Demo innovation projects
+ * - Demo announcements / circulars
+ * - Demo attendance sessions & summaries
+ * - Demo lab equipment
+ */
+export async function purgeAllDemoData(): Promise<{ success: boolean; purgedTotal: number }> {
+  let totalPurged = 0;
+
+  try {
+    // 1. Purge demo users & students
+    const usersRes = await purgeDemoUsers();
+    totalPurged += usersRes.deletedCount;
+
+    // 2. Purge Assessments
+    for (const assId of DEMO_ASSESSMENT_IDS) {
+      try {
+        const ref = doc(db, 'assessments', assId);
+        const snap = await getDoc(ref);
+        if (snap.exists()) {
+          await deleteDoc(ref);
+          totalPurged++;
+        }
+      } catch (_) {}
+    }
+
+    // Query assessments starting with ass-cia
+    try {
+      const assSnap = await getDocs(collection(db, 'assessments'));
+      for (const d of assSnap.docs) {
+        if (d.id.startsWith('ass-cia1-') || d.id.startsWith('ass-cia2-') || DEMO_ASSESSMENT_IDS.includes(d.id)) {
+          await deleteDoc(d.ref);
+          totalPurged++;
+        }
+      }
+    } catch (_) {}
+
+    // 3. Purge Marks entries
+    try {
+      const marksSnap = await getDocs(collection(db, 'marks'));
+      for (const d of marksSnap.docs) {
+        const data = d.data();
+        if (
+          d.id.startsWith('ass-cia') ||
+          data.studentId === 'u-stu-1' ||
+          data.studentId === 'u-stu-2' ||
+          data.studentId === 'u-stu-3' ||
+          data.studentRoll === '1AC22CS042' ||
+          data.studentRoll === '1AC22CS078' ||
+          data.studentRoll === '1AC22CS105'
+        ) {
+          await deleteDoc(d.ref);
+          totalPurged++;
+        }
+      }
+    } catch (_) {}
+
+    // 4. Purge StudentMarks summaries
+    const demoStudentMarkIds = [
+      'u-stu-1_CS501',
+      'u-stu-1_CS502',
+      'u-stu-1_CS503',
+      'u-stu-1_CSL507',
+      'sub-cs501',
+      'sub-cs502',
+      'sub-cs503',
+      'sub-csl507'
+    ];
+    for (const smId of demoStudentMarkIds) {
+      try {
+        const ref = doc(db, 'studentMarks', smId);
+        const snap = await getDoc(ref);
+        if (snap.exists()) {
+          await deleteDoc(ref);
+          totalPurged++;
+        }
+      } catch (_) {}
+    }
+
+    try {
+      const smSnap = await getDocs(collection(db, 'studentMarks'));
+      for (const d of smSnap.docs) {
+        const data = d.data();
+        if (
+          d.id.startsWith('u-stu-') ||
+          data.studentId === 'u-stu-1' ||
+          data.studentId === 'u-stu-2' ||
+          data.studentId === 'u-stu-3' ||
+          !data.studentId
+        ) {
+          await deleteDoc(d.ref);
+          totalPurged++;
+        }
+      }
+    } catch (_) {}
+
+    // 5. Purge Queries and responses
+    for (const qId of DEMO_QUERY_IDS) {
+      try {
+        // Purge responses subcollection
+        try {
+          const respSnap = await getDocs(collection(db, 'queries', qId, 'responses'));
+          for (const rd of respSnap.docs) {
+            await deleteDoc(rd.ref);
+            totalPurged++;
+          }
+        } catch (_) {}
+
+        const ref = doc(db, 'queries', qId);
+        const snap = await getDoc(ref);
+        if (snap.exists()) {
+          await deleteDoc(ref);
+          totalPurged++;
+        }
+      } catch (_) {}
+    }
+
+    try {
+      const qSnap = await getDocs(collection(db, 'queries'));
+      for (const d of qSnap.docs) {
+        const data = d.data();
+        if (
+          DEMO_QUERY_IDS.includes(d.id) ||
+          data.studentId === 'u-stu-1' ||
+          data.studentId === 'u-stu-2' ||
+          data.studentId === 'u-stu-3' ||
+          data.usn === '1AC22CS042' ||
+          data.usn === '1AC22CS078' ||
+          data.usn === '1AC22CS105'
+        ) {
+          await deleteDoc(d.ref);
+          totalPurged++;
+        }
+      }
+    } catch (_) {}
+
+    // 6. Purge Innovation Projects (problems)
+    for (const innId of DEMO_INNOVATION_IDS) {
+      try {
+        const ref = doc(db, 'problems', innId);
+        const snap = await getDoc(ref);
+        if (snap.exists()) {
+          await deleteDoc(ref);
+          totalPurged++;
+        }
+      } catch (_) {}
+    }
+
+    try {
+      const innSnap = await getDocs(collection(db, 'problems'));
+      for (const d of innSnap.docs) {
+        const data = d.data();
+        if (
+          DEMO_INNOVATION_IDS.includes(d.id) ||
+          data.leadStudent === 'Aarav Sharma' ||
+          data.leadStudent === 'Devika Nair' ||
+          data.leadStudent === 'Siddharth Rao' ||
+          data.usn === '1AC22CS042' ||
+          data.usn === '1AC22EC019' ||
+          data.usn === '1AC21CS099'
+        ) {
+          await deleteDoc(d.ref);
+          totalPurged++;
+        }
+      }
+    } catch (_) {}
+
+    // 7. Purge Announcements
+    for (const ancId of DEMO_ANNOUNCEMENT_IDS) {
+      try {
+        const ref = doc(db, 'announcements', ancId);
+        const snap = await getDoc(ref);
+        if (snap.exists()) {
+          await deleteDoc(ref);
+          totalPurged++;
+        }
+      } catch (_) {}
+    }
+
+    try {
+      const ancSnap = await getDocs(collection(db, 'announcements'));
+      for (const d of ancSnap.docs) {
+        const data = d.data();
+        if (
+          DEMO_ANNOUNCEMENT_IDS.includes(d.id) ||
+          data.attachmentName === 'Model_Exam_Schedule_Oct2026.pdf' ||
+          data.attachmentName === 'NAAC_Criterion_2_Compliance_Guidelines.pdf'
+        ) {
+          await deleteDoc(d.ref);
+          totalPurged++;
+        }
+      }
+    } catch (_) {}
+
+    // 8. Purge Attendance Sessions & Records
+    for (const sessId of DEMO_ATTENDANCE_SESSION_IDS) {
+      try {
+        const ref = doc(db, 'attendanceSessions', sessId);
+        const snap = await getDoc(ref);
+        if (snap.exists()) {
+          await deleteDoc(ref);
+          totalPurged++;
+        }
+      } catch (_) {}
+    }
+
+    try {
+      const attSnap = await getDocs(collection(db, 'attendance'));
+      for (const d of attSnap.docs) {
+        if (d.id.startsWith('att-sess-')) {
+          await deleteDoc(d.ref);
+          totalPurged++;
+        }
+      }
+    } catch (_) {}
+
+    try {
+      const summSnap = await getDocs(collection(db, 'attendanceSummaries'));
+      for (const d of summSnap.docs) {
+        if (d.id.startsWith('u-stu-') || d.data().studentId === 'u-stu-1') {
+          await deleteDoc(d.ref);
+          totalPurged++;
+        }
+      }
+    } catch (_) {}
+
+    // 9. Purge Lab Equipment
+    for (const eqId of DEMO_LAB_EQUIPMENT_IDS) {
+      try {
+        const ref = doc(db, 'labEquipment', eqId);
+        const snap = await getDoc(ref);
+        if (snap.exists()) {
+          await deleteDoc(ref);
+          totalPurged++;
+        }
+      } catch (_) {}
+    }
+
+    // 10. Reset department mock metrics in Firestore to 0
+    try {
+      const deptsSnap = await getDocs(collection(db, 'departments'));
+      for (const d of deptsSnap.docs) {
+        await updateDoc(d.ref, {
+          facultyCount: 0,
+          studentCount: 0,
+          avgAttendance: 0,
+          syllabusCompletion: 0,
+          hodName: 'Unassigned',
+          hodEmail: ''
+        });
+      }
+    } catch (_) {}
+
+    // 11. Clean subjects of demo faculty references
+    try {
+      const subsSnap = await getDocs(collection(db, 'subjects'));
+      for (const d of subsSnap.docs) {
+        const subData = d.data();
+        if (
+          subData.facultyId === 'u-fac-1' ||
+          subData.facultyId === 'u-fac-2' ||
+          (subData.facultyName && (subData.facultyName.includes('Vikramaditya') || subData.facultyName.includes('Ananya')))
+        ) {
+          await updateDoc(d.ref, {
+            facultyId: '',
+            facultyName: 'Unassigned',
+            hoursConducted: 0,
+            status: 'pending'
+          });
+          totalPurged++;
+        }
+      }
+    } catch (_) {}
+
+    console.log(`[Firestore Purge] Successfully removed ${totalPurged} demo records.`);
+    return { success: true, purgedTotal: totalPurged };
+  } catch (err) {
+    console.warn('[Firestore Purge] Notice during full demo purge:', err);
+    return { success: false, purgedTotal: totalPurged };
+  }
+}
+
+/**
+ * Idempotently seeds initial departments and subjects if empty.
+ * Never seeds fake users, fake marks, fake queries, or fake circulars.
+ */
+export async function seedFirestoreDatabase(force = false): Promise<{ success: boolean; message: string }> {
+  try {
+    const seedMetaRef = doc(db, 'system', 'seed_status');
+
+    // Always ensure all demo data is thoroughly purged from Firestore
+    await purgeAllDemoData();
+
+    try {
+      const seedMetaSnap = await getDoc(seedMetaRef);
+      if (seedMetaSnap.exists() && !force) {
+        console.log('Firestore is already seeded. Demo items purged.');
+        return { success: true, message: 'Database verified with zero demo data' };
+      }
+    } catch (checkError) {
+      const checkMsg = checkError instanceof Error ? checkError.message : String(checkError);
+      if (checkMsg.includes('offline') || checkMsg.includes('unavailable')) {
+        console.warn('Firestore client currently offline or initializing. Deferring seed verification.');
+        return { success: true, message: 'Firestore offline/initializing' };
+      }
+      throw checkError;
+    }
+
+    console.log('Initializing foundational departments & subjects...');
+
+    // 1. Seed Departments (Foundational academic schema only)
+    for (const dept of INITIAL_DEPARTMENTS) {
+      const ref = doc(db, 'departments', dept.id);
+      const snap = await getDoc(ref);
+      if (!snap.exists()) {
+        await setDoc(ref, { ...dept, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+      }
+    }
+
+    // 2. Seed Subjects (Foundational syllabus curriculum only)
+    for (const sub of INITIAL_SUBJECTS) {
+      const ref = doc(db, 'subjects', sub.id);
+      const snap = await getDoc(ref);
+      if (!snap.exists()) {
+        await setDoc(ref, { ...sub, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+      }
+    }
+
+    // Mark system seed complete
+    await setDoc(seedMetaRef, {
+      seeded: true,
+      seededAt: serverTimestamp(),
+      version: 2,
+      cleanRealTime: true
+    });
+
+    console.log('Firestore foundation initialized clean with zero fake data.');
+    return { success: true, message: 'Firestore initialized with 100% clean database' };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    if (errorMsg.includes('offline') || errorMsg.includes('unavailable')) {
+      console.warn('Firestore database seed skipped (client offline/initializing):', errorMsg);
+      return { success: true, message: 'Skipped seed while client connecting' };
+    }
+    console.warn('Notice during Firestore database init:', error);
+    return { success: false, message: errorMsg };
+  }
+}

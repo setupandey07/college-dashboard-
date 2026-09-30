@@ -1,0 +1,200 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Authoritative check on user document in Firestore
+    function getUserRole() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+        : 'guest';
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        getUserRole() == 'admin' ||
+        request.auth.token.email == 'pkr02042006@gmail.com' ||
+        request.auth.token.email == 'startup5077@gmail.com' ||
+        request.auth.token.email == '525077@student.nitandhra.ac.in' ||
+        request.auth.uid == 'u-admin-1'
+      );
+    }
+
+    function isFacultyOrHod() {
+      return isSignedIn() && (
+        getUserRole() == 'faculty' ||
+        getUserRole() == 'hod' ||
+        isAdmin()
+      );
+    }
+
+    function isLabStaff() {
+      return isSignedIn() && (
+        getUserRole() == 'lab_assistant' ||
+        isAdmin()
+      );
+    }
+
+    // 1. System Metadata & Health Connection Check
+    match /system/{docId} {
+      allow read: if true; // Connection handshake check
+      allow write: if isAdmin();
+    }
+
+    match /test/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // 2. Users Collection (Profile Management & Privilege Escalation Protection)
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && (isAdmin() || request.auth.uid == userId);
+      allow update: if (
+        isAdmin() ||
+        (isSignedIn() && request.auth.uid == userId && !incoming().diff(existing()).affectedKeys().hasAny(['role', 'departmentCode', 'regId', 'status', 'section', 'semester']))
+      );
+      allow delete: if isAdmin();
+    }
+
+    // 3. Students Collection
+    match /students/{studentId} {
+      allow read: if isSignedIn();
+      allow write: if isFacultyOrHod() || isAdmin();
+    }
+
+    // 4. Academic Departments & Sections
+    match /departments/{departmentId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /sections/{sectionId} {
+      allow read: if isSignedIn();
+      allow write: if isFacultyOrHod() || isAdmin();
+    }
+
+    // 5. Course Subjects & Syllabus
+    match /subjects/{subjectId} {
+      allow read: if isSignedIn();
+      allow write: if isFacultyOrHod() || isAdmin();
+    }
+
+    // 6. Attendance Sessions & Records
+    match /attendanceSessions/{sessionId} {
+      allow read: if isSignedIn();
+      allow write: if isFacultyOrHod() || isAdmin();
+    }
+
+    match /attendance/{recordId} {
+      allow read: if isSignedIn();
+      allow write: if isFacultyOrHod() || isAdmin();
+    }
+
+    match /attendanceSummaries/{summaryId} {
+      allow read: if isSignedIn();
+      allow write: if isFacultyOrHod() || isAdmin();
+    }
+
+    // 7. Assessments & Marks (Strictly protected from student mutation)
+    match /assessments/{assessmentId} {
+      allow read: if isSignedIn();
+      allow write: if isFacultyOrHod() || isAdmin();
+    }
+
+    match /marks/{markId} {
+      allow read: if isSignedIn();
+      allow write: if isFacultyOrHod() || isAdmin();
+    }
+
+    match /studentMarks/{studentMarkId} {
+      allow read: if isSignedIn();
+      allow write: if isFacultyOrHod() || isAdmin();
+    }
+
+    // 8. Queries & Grievances
+    match /queries/{queryId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && (isAdmin() || isFacultyOrHod() || resource.data.studentId == request.auth.uid);
+      allow delete: if isAdmin();
+
+      match /responses/{responseId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn();
+        allow update, delete: if isAdmin();
+      }
+    }
+
+    // 9. Innovation Projects & Comments
+    match /problems/{problemId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn();
+      allow delete: if isAdmin();
+
+      match /comments/{commentId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn();
+        allow update, delete: if isAdmin();
+      }
+    }
+
+    // 10. Announcements & Circulars
+    match /announcements/{announcementId} {
+      allow read: if isSignedIn();
+      allow write: if isFacultyOrHod() || isAdmin();
+    }
+
+    // 11. Laboratory Equipment
+    match /labEquipment/{equipmentId} {
+      allow read: if isSignedIn();
+      allow write: if isLabStaff() || isAdmin();
+    }
+
+    // 12. Faculty Workloads
+    match /workloads/{facultyId} {
+      allow read: if isSignedIn();
+      allow write: if isFacultyOrHod() || isAdmin();
+    }
+
+    // 13. Notifications
+    match /notifications/{notificationId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // 14. Audit Logs (Append-only; never editable or deletable)
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isSignedIn();
+      allow update, delete: if false;
+    }
+
+    // 15. Timetables Collection (Class / Section weekly schedule)
+    match /timetables/{sectionId} {
+      allow read: if isSignedIn();
+      allow write: if isFacultyOrHod() || isAdmin();
+    }
+  }
+}

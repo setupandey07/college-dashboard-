@@ -1,0 +1,349 @@
+{
+  "entities": {
+    "user": {
+      "title": "User Profile",
+      "description": "Institutional user entity for AcademicCore supporting RBAC roles",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 150 },
+        "email": { "type": "string", "format": "email", "maxLength": 150 },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "hod", "faculty", "lab_assistant", "student"]
+        },
+        "department": { "type": "string", "maxLength": 120 },
+        "departmentCode": { "type": "string", "maxLength": 20 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "regId": { "type": "string", "maxLength": 50 },
+        "designation": { "type": "string", "maxLength": 100 },
+        "semester": { "type": "number" },
+        "section": { "type": "string", "maxLength": 10 },
+        "joiningYear": { "type": "string", "maxLength": 10 },
+        "status": {
+          "type": "string",
+          "enum": ["active", "on_leave", "inactive"]
+        }
+      },
+      "required": ["name", "email", "role", "regId", "status"]
+    },
+    "student": {
+      "title": "Student Record",
+      "description": "Academic and enrollment profile for enrolled students",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 150 },
+        "email": { "type": "string", "format": "email", "maxLength": 150 },
+        "rollNumber": { "type": "string", "maxLength": 50 },
+        "registrationNumber": { "type": "string", "maxLength": 50 },
+        "departmentId": { "type": "string", "maxLength": 50 },
+        "departmentName": { "type": "string", "maxLength": 100 },
+        "year": { "type": "number" },
+        "section": { "type": "string", "maxLength": 10 },
+        "semester": { "type": "number" },
+        "admissionYear": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "inactive"] }
+      },
+      "required": ["userId", "name", "rollNumber", "departmentId", "semester", "status"]
+    },
+    "department": {
+      "title": "Academic Department",
+      "description": "Institutional department entity with faculty, student and lab counts",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "maxLength": 20 },
+        "name": { "type": "string", "maxLength": 150 },
+        "hodName": { "type": "string", "maxLength": 150 },
+        "hodEmail": { "type": "string", "format": "email", "maxLength": 150 },
+        "facultyCount": { "type": "number" },
+        "studentCount": { "type": "number" },
+        "labsCount": { "type": "number" },
+        "avgAttendance": { "type": "number" },
+        "syllabusCompletion": { "type": "number" },
+        "establishedYear": { "type": "number" },
+        "description": { "type": "string", "maxLength": 1000 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "location": { "type": "string", "maxLength": 100 },
+        "status": { "type": "string", "enum": ["active", "inactive"] }
+      },
+      "required": ["code", "name", "hodName"]
+    },
+    "subject": {
+      "title": "Course Subject",
+      "description": "Academic course subject with syllabus units and contact hours tracking",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "maxLength": 30 },
+        "name": { "type": "string", "maxLength": 150 },
+        "department": { "type": "string", "maxLength": 50 },
+        "semester": { "type": "number" },
+        "credits": { "type": "number" },
+        "type": { "type": "string", "enum": ["theory", "lab", "integrated"] },
+        "facultyId": { "type": "string", "maxLength": 100 },
+        "facultyName": { "type": "string", "maxLength": 150 },
+        "totalHoursPlanned": { "type": "number" },
+        "hoursConducted": { "type": "number" },
+        "status": { "type": "string", "enum": ["on_track", "behind_schedule", "completed"] }
+      },
+      "required": ["code", "name", "department", "semester", "credits", "facultyId"]
+    },
+    "attendanceSession": {
+      "title": "Attendance Session",
+      "description": "Conducted lecture/lab session with attendance tallies",
+      "type": "object",
+      "properties": {
+        "subjectId": { "type": "string", "maxLength": 100 },
+        "subjectCode": { "type": "string", "maxLength": 30 },
+        "subjectName": { "type": "string", "maxLength": 150 },
+        "facultyId": { "type": "string", "maxLength": 100 },
+        "date": { "type": "string", "maxLength": 30 },
+        "slot": { "type": "string", "maxLength": 50 },
+        "semester": { "type": "number" },
+        "section": { "type": "string", "maxLength": 10 },
+        "topicCovered": { "type": "string", "maxLength": 300 },
+        "totalStudents": { "type": "number" },
+        "presentCount": { "type": "number" },
+        "absentCount": { "type": "number" },
+        "status": { "type": "string", "enum": ["draft", "submitted", "locked"] }
+      },
+      "required": ["subjectId", "subjectCode", "facultyId", "date", "status"]
+    },
+    "attendanceRecord": {
+      "title": "Student Attendance Record",
+      "description": "Individual student attendance status for a specific session",
+      "type": "object",
+      "properties": {
+        "sessionId": { "type": "string", "maxLength": 100 },
+        "studentId": { "type": "string", "maxLength": 100 },
+        "studentName": { "type": "string", "maxLength": 150 },
+        "studentRoll": { "type": "string", "maxLength": 50 },
+        "subjectId": { "type": "string", "maxLength": 100 },
+        "subjectCode": { "type": "string", "maxLength": 30 },
+        "status": { "type": "string", "enum": ["present", "absent", "late"] },
+        "date": { "type": "string", "maxLength": 30 }
+      },
+      "required": ["sessionId", "studentId", "subjectCode", "status"]
+    },
+    "attendanceSummary": {
+      "title": "Student Attendance Summary",
+      "description": "Aggregated attendance summary for a student in a course subject",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string", "maxLength": 100 },
+        "subjectId": { "type": "string", "maxLength": 100 },
+        "subjectCode": { "type": "string", "maxLength": 30 },
+        "subjectName": { "type": "string", "maxLength": 150 },
+        "totalClasses": { "type": "number" },
+        "attendedClasses": { "type": "number" },
+        "percentage": { "type": "number" },
+        "facultyName": { "type": "string", "maxLength": 150 }
+      },
+      "required": ["studentId", "subjectCode", "totalClasses", "attendedClasses", "percentage"]
+    },
+    "assessment": {
+      "title": "Assessment Record",
+      "description": "Internal Continuous Assessment (CIA) or exam record",
+      "type": "object",
+      "properties": {
+        "subjectId": { "type": "string", "maxLength": 100 },
+        "subjectCode": { "type": "string", "maxLength": 30 },
+        "subjectName": { "type": "string", "maxLength": 150 },
+        "assessmentType": {
+          "type": "string",
+          "enum": ["CIA-1", "CIA-2", "Model Exam", "Practical / Viva", "Assignment"]
+        },
+        "semester": { "type": "number" },
+        "section": { "type": "string", "maxLength": 10 },
+        "maxMarks": { "type": "number" },
+        "date": { "type": "string", "maxLength": 30 },
+        "averageScore": { "type": "number" }
+      },
+      "required": ["subjectId", "subjectCode", "assessmentType", "maxMarks"]
+    },
+    "mark": {
+      "title": "Student Mark Entry",
+      "description": "Marks awarded to an individual student for an assessment",
+      "type": "object",
+      "properties": {
+        "assessmentId": { "type": "string", "maxLength": 100 },
+        "studentId": { "type": "string", "maxLength": 100 },
+        "studentName": { "type": "string", "maxLength": 150 },
+        "studentRoll": { "type": "string", "maxLength": 50 },
+        "subjectCode": { "type": "string", "maxLength": 30 },
+        "marksObtained": { "type": "number" },
+        "maxMarks": { "type": "number" },
+        "grade": { "type": "string", "maxLength": 10 }
+      },
+      "required": ["assessmentId", "studentId", "marksObtained", "maxMarks"]
+    },
+    "query": {
+      "title": "Academic Grievance Query",
+      "description": "Student academic, examination, lab, or administrative grievance ticket",
+      "type": "object",
+      "properties": {
+        "ticketId": { "type": "string", "maxLength": 50 },
+        "title": { "type": "string", "maxLength": 200 },
+        "category": {
+          "type": "string",
+          "enum": ["academic", "lab", "exam", "admin", "infrastructure"]
+        },
+        "studentId": { "type": "string", "maxLength": 100 },
+        "studentName": { "type": "string", "maxLength": 150 },
+        "usn": { "type": "string", "maxLength": 50 },
+        "department": { "type": "string", "maxLength": 100 },
+        "status": { "type": "string", "enum": ["open", "in_progress", "resolved"] },
+        "priority": { "type": "string", "enum": ["high", "medium", "low"] },
+        "description": { "type": "string", "maxLength": 2000 }
+      },
+      "required": ["ticketId", "title", "category", "studentId", "status", "priority", "description"]
+    },
+    "problem": {
+      "title": "Innovation Project Proposal",
+      "description": "Student or faculty research, patent, or startup project in the Innovation Hub",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "maxLength": 200 },
+        "domain": { "type": "string", "maxLength": 100 },
+        "abstract": { "type": "string", "maxLength": 3000 },
+        "leadStudent": { "type": "string", "maxLength": 150 },
+        "usn": { "type": "string", "maxLength": 50 },
+        "mentorName": { "type": "string", "maxLength": 150 },
+        "department": { "type": "string", "maxLength": 100 },
+        "category": { "type": "string", "enum": ["research", "patent", "hackathon", "capstone"] },
+        "status": { "type": "string", "enum": ["ideation", "under_review", "approved", "funded"] },
+        "fundingAmount": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["title", "domain", "leadStudent", "status"]
+    },
+    "announcement": {
+      "title": "Official Announcement",
+      "description": "Official institutional circular or notice",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "maxLength": 200 },
+        "content": { "type": "string", "maxLength": 3000 },
+        "category": { "type": "string", "enum": ["urgent", "academic", "exam", "event", "circular"] },
+        "targetAudience": { "type": "string", "enum": ["all", "faculty", "students", "lab"] },
+        "department": { "type": "string", "maxLength": 100 },
+        "authorName": { "type": "string", "maxLength": 150 },
+        "authorRole": { "type": "string", "maxLength": 100 },
+        "date": { "type": "string", "maxLength": 30 },
+        "isPinned": { "type": "boolean" }
+      },
+      "required": ["title", "content", "category", "targetAudience", "authorName"]
+    },
+    "labEquipment": {
+      "title": "Laboratory Equipment Asset",
+      "description": "Hardware and workstation inventory tracking for lab operations",
+      "type": "object",
+      "properties": {
+        "labName": { "type": "string", "maxLength": 150 },
+        "department": { "type": "string", "maxLength": 100 },
+        "equipmentName": { "type": "string", "maxLength": 200 },
+        "assetCode": { "type": "string", "maxLength": 50 },
+        "quantity": { "type": "number" },
+        "workingCount": { "type": "number" },
+        "maintenanceCount": { "type": "number" },
+        "status": { "type": "string", "enum": ["operational", "maintenance", "critical"] },
+        "inCharge": { "type": "string", "maxLength": 150 }
+      },
+      "required": ["labName", "department", "equipmentName", "assetCode", "status"]
+    },
+    "workload": {
+      "title": "Faculty Workload Item",
+      "description": "Weekly teaching contact hours and lecture credit distribution",
+      "type": "object",
+      "properties": {
+        "facultyId": { "type": "string", "maxLength": 100 },
+        "facultyName": { "type": "string", "maxLength": 150 },
+        "designation": { "type": "string", "maxLength": 100 },
+        "department": { "type": "string", "maxLength": 100 },
+        "targetWeeklyHours": { "type": "number" },
+        "currentWeeklyHours": { "type": "number" },
+        "status": { "type": "string", "enum": ["optimal", "overload", "underload"] }
+      },
+      "required": ["facultyId", "facultyName", "department", "currentWeeklyHours", "status"]
+    },
+    "auditLog": {
+      "title": "Administrative Audit Log",
+      "description": "Immutable log entry for critical administrative and academic changes",
+      "type": "object",
+      "properties": {
+        "actorUid": { "type": "string", "maxLength": 128 },
+        "actorName": { "type": "string", "maxLength": 150 },
+        "actorRole": { "type": "string", "maxLength": 50 },
+        "action": { "type": "string", "maxLength": 100 },
+        "entityType": { "type": "string", "maxLength": 50 },
+        "entityId": { "type": "string", "maxLength": 100 }
+      },
+      "required": ["actorName", "action", "entityType", "entityId"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "user",
+      "description": "User profiles and credentials with assigned academic roles"
+    },
+    "/students/{studentId}": {
+      "schema": "student",
+      "description": "Detailed student academic records referencing users/{userId}"
+    },
+    "/departments/{departmentId}": {
+      "schema": "department",
+      "description": "Academic department entities and statistical aggregates"
+    },
+    "/subjects/{subjectId}": {
+      "schema": "subject",
+      "description": "Courses with planned syllabus units, hours conducted, and topic progress"
+    },
+    "/attendanceSessions/{sessionId}": {
+      "schema": "attendanceSession",
+      "description": "Submitted attendance sessions for lectures and practical classes"
+    },
+    "/attendance/{recordId}": {
+      "schema": "attendanceRecord",
+      "description": "Fine-grained individual student attendance records"
+    },
+    "/attendanceSummaries/{summaryId}": {
+      "schema": "attendanceSummary",
+      "description": "Student subject attendance percentage aggregates"
+    },
+    "/assessments/{assessmentId}": {
+      "schema": "assessment",
+      "description": "Internal Continuous Assessment (CIA) definitions and entries"
+    },
+    "/marks/{markId}": {
+      "schema": "mark",
+      "description": "Individual student marks obtained for assessments"
+    },
+    "/queries/{queryId}": {
+      "schema": "query",
+      "description": "Academic grievance and inquiry tickets"
+    },
+    "/queries/{queryId}/responses/{responseId}": {
+      "schema": "user",
+      "description": "Official responses and staff comments for grievance tickets"
+    },
+    "/problems/{problemId}": {
+      "schema": "problem",
+      "description": "Innovation Cell research, patent and project records"
+    },
+    "/announcements/{announcementId}": {
+      "schema": "announcement",
+      "description": "Institute circulars, semester deadlines, and exam notices"
+    },
+    "/labEquipment/{equipmentId}": {
+      "schema": "labEquipment",
+      "description": "Computer laboratory hardware assets and maintenance records"
+    },
+    "/workloads/{facultyId}": {
+      "schema": "workload",
+      "description": "Faculty weekly contact hours and AICTE compliance tracking"
+    },
+    "/auditLogs/{logId}": {
+      "schema": "auditLog",
+      "description": "Immutable security and administrative audit trail"
+    }
+  }
+}

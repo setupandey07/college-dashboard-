@@ -1,0 +1,6 @@
+{
+  "name": "AcademicCore — College Academic Management & Monitoring System",
+  "description": "Comprehensive College Academic Management & Monitoring System featuring dedicated role-based dashboards for Admin, HOD, Faculty, Lab Assistant, and Student, syllabus tracking, attendance, marks, workload, queries, and innovation hub.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
