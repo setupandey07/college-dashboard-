@@ -19,11 +19,58 @@ import {
   BookOpen,
   Layers,
   Sparkles,
-  AlertCircle
+  AlertCircle,
+  UploadCloud,
+  FileUp,
+  FileText,
+  Download,
+  ExternalLink,
+  File,
+  RefreshCw,
+  Eye,
+  Paperclip
 } from 'lucide-react';
 import { useAcademicData } from '../../context/AcademicDataContext';
 import { useAuth } from '../../context/AuthContext';
-import { Subject, SyllabusUnit, SyllabusTopic } from '../../types';
+import { Subject, SyllabusUnit, SyllabusTopic, MasterNote, MaterialType } from '../../types';
+import { uploadUnitNoteFile, deleteUnitNoteFile } from '../../services/storage';
+
+const SUPPORTED_EXTENSIONS = ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'png', 'jpg', 'jpeg', 'webp', 'txt'];
+const DANGEROUS_EXTENSIONS = ['exe', 'bat', 'cmd', 'sh', 'vbs', 'js', 'mjs', 'ts', 'py', 'apk', 'bin', 'msi', 'dll', 'com', 'scr'];
+
+function validateNoteFile(file: File): { valid: boolean; error?: string } {
+  const ext = file.name.split('.').pop()?.toLowerCase() || '';
+  if (DANGEROUS_EXTENSIONS.includes(ext)) {
+    return { valid: false, error: 'This file type is not supported for security reasons.' };
+  }
+  if (!SUPPORTED_EXTENSIONS.includes(ext)) {
+    return {
+      valid: false,
+      error: 'This file type is not supported. Please upload PDF, Word (DOC/DOCX), PowerPoint (PPT/PPTX), Excel (XLS/XLSX), or Images.'
+    };
+  }
+  if (file.size > 25 * 1024 * 1024) {
+    return { valid: false, error: 'File size exceeds 25 MB limit. Please choose a smaller file.' };
+  }
+  return { valid: true };
+}
+
+function formatFileSize(bytes: number): string {
+  if (!bytes || isNaN(bytes)) return 'N/A';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function getFileIcon(fileName?: string, fileType?: string) {
+  const ext = (fileName || fileType || '').split('.').pop()?.toLowerCase();
+  if (ext === 'pdf') return <FileText className="w-4 h-4 text-red-600" />;
+  if (['doc', 'docx'].includes(ext || '')) return <FileText className="w-4 h-4 text-blue-600" />;
+  if (['ppt', 'pptx'].includes(ext || '')) return <FileText className="w-4 h-4 text-orange-600" />;
+  if (['xls', 'xlsx', 'csv'].includes(ext || '')) return <FileText className="w-4 h-4 text-emerald-600" />;
+  if (['png', 'jpg', 'jpeg', 'webp'].includes(ext || '')) return <FileText className="w-4 h-4 text-purple-600" />;
+  return <FileText className="w-4 h-4 text-slate-500" />;
+}
 
 interface SyllabusModuleProps {
   initialSubjectId?: string;
@@ -31,11 +78,16 @@ interface SyllabusModuleProps {
 }
 
 export const SyllabusModule: React.FC<SyllabusModuleProps> = ({ initialSubjectId, initialDept }) => {
-  const { currentRole, currentUser } = useAuth();
+  const { currentRole, actualRole, currentUser } = useAuth();
   const {
     subjects,
     departments,
+    sections,
     users,
+    notes,
+    createNote,
+    updateNote,
+    deleteNote,
     toggleSyllabusTopic,
     createSubject,
     updateSubject,
@@ -85,8 +137,31 @@ export const SyllabusModule: React.FC<SyllabusModuleProps> = ({ initialSubjectId
         return isAssigned && isDeptMatch;
       });
     }
-    return subjects;
-  }, [subjects, isAdmin, isHod, isFaculty, isLabAssistant, currentUser, facultyAssignedIds]);
+    if (currentRole === 'student' || actualRole === 'student') {
+      const stuDeptCode = (currentUser?.departmentCode || '').toUpperCase().trim();
+      const stuDeptName = (currentUser?.department || '').toLowerCase().trim();
+      const stuYear = currentUser?.currentAcademicYear
+        ? Number(currentUser.currentAcademicYear.charAt(0))
+        : (currentUser?.semester ? Math.ceil(currentUser.semester / 2) : undefined);
+      const stuSec = (currentUser?.section || '').replace(/^Section\s+/i, '').trim().toUpperCase();
+
+      return subjects.filter(s => {
+        const subDeptCode = (s.departmentCode || '').toUpperCase().trim();
+        const subDeptName = (s.department || '').toLowerCase().trim();
+        const isDeptMatch = (stuDeptCode && subDeptCode === stuDeptCode) || (stuDeptName && (subDeptName === stuDeptName || subDeptName.includes(stuDeptName)));
+        if (!isDeptMatch) return false;
+
+        const subYear = s.year || (s.semester ? Math.ceil(s.semester / 2) : undefined);
+        if (stuYear && subYear && subYear !== stuYear) return false;
+
+        const subSec = (s.section || '').replace(/^Section\s+/i, '').trim().toUpperCase();
+        if (stuSec && subSec && subSec !== stuSec) return false;
+
+        return true;
+      });
+    }
+    return [];
+  }, [subjects, isAdmin, isHod, isFaculty, isLabAssistant, currentRole, actualRole, currentUser, facultyAssignedIds]);
 
   // Filter States
   const [filterDept, setFilterDept] = useState<string>(initialDept || 'all');
@@ -147,6 +222,29 @@ export const SyllabusModule: React.FC<SyllabusModuleProps> = ({ initialSubjectId
   const [topicDesc, setTopicDescription] = useState('');
   const [topicHours, setTopicHours] = useState<number>(2);
 
+  // Unit Notes Upload & Management State
+  const [isUploadNoteModalOpen, setIsUploadNoteModalOpen] = useState(false);
+  const [uploadTargetUnit, setUploadTargetUnit] = useState<SyllabusUnit | null>(null);
+  const [selectedNoteFile, setSelectedNoteFile] = useState<File | null>(null);
+  const [noteTitle, setNoteTitle] = useState('');
+  const [noteDescription, setNoteDescription] = useState('');
+  const [noteMaterialType, setNoteMaterialType] = useState<MaterialType>('Lecture Notes');
+  const [fileValidationError, setFileValidationError] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
+  const [isUploadingNote, setIsUploadingNote] = useState(false);
+
+  // Edit Note Details State
+  const [isEditNoteModalOpen, setIsEditNoteModalOpen] = useState(false);
+  const [editingNote, setEditingNote] = useState<MasterNote | null>(null);
+  const [editNoteTitle, setEditNoteTitle] = useState('');
+  const [editNoteDesc, setEditNoteDesc] = useState('');
+  const [editNoteMaterialType, setEditNoteMaterialType] = useState<MaterialType>('Lecture Notes');
+
+  // Replace Note File State
+  const [isReplaceModalOpen, setIsReplaceModalOpen] = useState(false);
+  const [replacingNote, setReplacingNote] = useState<MasterNote | null>(null);
+  const [replaceFile, setReplaceFile] = useState<File | null>(null);
+
   const facultyUsers = users.filter(u => u.role === 'faculty' || u.role === 'hod');
 
   const showNotification = (type: 'success' | 'error', message: string) => {
@@ -166,7 +264,9 @@ export const SyllabusModule: React.FC<SyllabusModuleProps> = ({ initialSubjectId
 
     const matchSem = filterSem === 'all' || sub.semester === Number(filterSem);
 
-    const matchSection = filterSection === 'all' || !sub.section || sub.section === filterSection;
+    const normFilterSec = filterSection.replace(/^Section\s+/i, '').trim().toUpperCase();
+    const normSubSec = (sub.section || '').replace(/^Section\s+/i, '').trim().toUpperCase();
+    const matchSection = filterSection === 'all' || normSubSec === normFilterSec;
 
     const matchSearch = !searchQuery.trim() ||
       sub.code.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -213,6 +313,16 @@ export const SyllabusModule: React.FC<SyllabusModuleProps> = ({ initialSubjectId
   }, [activeSubject, isAdmin, isHod, isFaculty, isLabAssistant, currentUser, facultyAssignedIds]);
 
   const canEditCoverage = (isAdmin || isHod || isFaculty || isLabAssistant) && isSubjectAuthorized;
+
+  // Strict role permissions for uploading/managing study notes:
+  // - Students: Strictly read-only
+  // - Faculty: Authorized assigned subjects/classrooms only
+  // - HOD: Department-wide subjects only
+  // - Admin: All
+  const canManageNotes = React.useMemo(() => {
+    if (currentRole === 'student' || actualRole === 'student') return false;
+    return canEditCoverage;
+  }, [currentRole, actualRole, canEditCoverage]);
 
   // Compute coverage metrics dynamically from actual topics
   const computeSubjectMetrics = (sub: Subject | null) => {
@@ -523,6 +633,216 @@ export const SyllabusModule: React.FC<SyllabusModuleProps> = ({ initialSubjectId
       setDeleteConfirmId(null);
     } catch (err) {
       showNotification('error', 'Failed to delete item.');
+    }
+  };
+
+  // --- Unit Study Notes Operations ---
+  const handleNoteFileChange = (file: File | null) => {
+    if (!file) {
+      setSelectedNoteFile(null);
+      setFileValidationError(null);
+      return;
+    }
+    const val = validateNoteFile(file);
+    if (!val.valid) {
+      setSelectedNoteFile(null);
+      setFileValidationError(val.error || 'Invalid file');
+      return;
+    }
+    setFileValidationError(null);
+    setSelectedNoteFile(file);
+    if (!noteTitle.trim()) {
+      const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
+      setNoteTitle(cleanName);
+    }
+  };
+
+  const handleUploadNoteSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!uploadTargetUnit || !activeSubject) {
+      showNotification('error', 'Academic unit context is missing.');
+      return;
+    }
+    if (!selectedNoteFile) {
+      setFileValidationError('Please select a file to upload.');
+      return;
+    }
+    const val = validateNoteFile(selectedNoteFile);
+    if (!val.valid) {
+      setFileValidationError(val.error || 'Invalid file');
+      return;
+    }
+
+    setIsUploadingNote(true);
+    setUploadProgress(25);
+
+    try {
+      const matchedSection = sections.find(
+        sec => sec.departmentCode === activeSubject.departmentCode &&
+          sec.sectionName.toUpperCase() === (activeSubject.section || 'A').toUpperCase()
+      );
+      const classroomId = (activeSubject as any).classroomId || matchedSection?.id || `sec-${activeSubject.section || 'A'}`;
+      const departmentId = (activeSubject as any).departmentId || (departments.find(d => d.code === activeSubject.departmentCode || d.name === activeSubject.department)?.id) || activeSubject.departmentCode || 'general';
+
+      setUploadProgress(50);
+
+      const { downloadUrl, storagePath } = await uploadUnitNoteFile(selectedNoteFile, {
+        departmentId,
+        classroomId,
+        subjectId: activeSubject.id,
+        unitId: uploadTargetUnit.id
+      });
+
+      setUploadProgress(85);
+
+      const notePayload: Omit<MasterNote, 'id'> = {
+        title: noteTitle.trim() || selectedNoteFile.name,
+        description: noteDescription.trim(),
+        department: activeSubject.department,
+        departmentCode: activeSubject.departmentCode || '',
+        departmentId,
+        classroomId,
+        unitId: uploadTargetUnit.id, // Stable unit ID
+        academicYear: String(activeSubject.year || 2),
+        year: activeSubject.year || Math.ceil((activeSubject.semester || 1) / 2),
+        semester: activeSubject.semester || 1,
+        section: activeSubject.section || 'A',
+        subjectId: activeSubject.id,
+        subjectCode: activeSubject.code,
+        subjectName: activeSubject.name,
+        unitOrTopic: `Unit ${uploadTargetUnit.unitNumber}: ${uploadTargetUnit.title}`,
+        materialType: noteMaterialType,
+        fileUrl: downloadUrl,
+        fileName: selectedNoteFile.name,
+        fileSize: formatFileSize(selectedNoteFile.size),
+        fileType: selectedNoteFile.name.split('.').pop()?.toUpperCase() || 'DOCUMENT',
+        storagePath,
+        uploadedBy: currentUser?.id || 'faculty',
+        uploadedByName: currentUser?.name || 'Course Faculty',
+        uploadedByEmail: currentUser?.email || '',
+        uploadedByRole: (currentRole as any) || 'faculty',
+        uploadedAt: new Date().toISOString()
+      };
+
+      await createNote(notePayload);
+
+      setUploadProgress(100);
+      showNotification('success', 'Notes uploaded successfully.');
+
+      setIsUploadNoteModalOpen(false);
+      setSelectedNoteFile(null);
+      setNoteTitle('');
+      setNoteDescription('');
+      setNoteMaterialType('Lecture Notes');
+      setFileValidationError(null);
+    } catch (err: any) {
+      showNotification('error', err?.message || 'Failed to upload note.');
+    } finally {
+      setIsUploadingNote(false);
+      setUploadProgress(0);
+    }
+  };
+
+  const handleViewNote = (note: MasterNote) => {
+    if (!note.fileUrl) {
+      showNotification('error', 'Note file URL is not available.');
+      return;
+    }
+    window.open(note.fileUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleDownloadNote = (note: MasterNote) => {
+    if (!note.fileUrl) {
+      showNotification('error', 'Note file URL is not available.');
+      return;
+    }
+    const link = document.createElement('a');
+    link.href = note.fileUrl;
+    link.download = note.fileName || `${note.title}.pdf`;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleSaveEditNote = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingNote) return;
+    try {
+      setIsSubmitting(true);
+      await updateNote(editingNote.id, {
+        title: editNoteTitle.trim(),
+        description: editNoteDesc.trim(),
+        materialType: editNoteMaterialType,
+        updatedAt: new Date().toISOString()
+      });
+      showNotification('success', 'Note details updated.');
+      setIsEditNoteModalOpen(false);
+      setEditingNote(null);
+    } catch (err: any) {
+      showNotification('error', err?.message || 'Failed to update note.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleReplaceFileSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!replacingNote || !replaceFile) return;
+    const val = validateNoteFile(replaceFile);
+    if (!val.valid) {
+      showNotification('error', val.error || 'Invalid file.');
+      return;
+    }
+    try {
+      setIsSubmitting(true);
+      const { downloadUrl, storagePath } = await uploadUnitNoteFile(replaceFile, {
+        departmentId: replacingNote.departmentId,
+        classroomId: replacingNote.classroomId,
+        subjectId: replacingNote.subjectId,
+        unitId: replacingNote.unitId
+      });
+
+      if (replacingNote.storagePath) {
+        await deleteUnitNoteFile(replacingNote.storagePath);
+      }
+
+      await updateNote(replacingNote.id, {
+        fileUrl: downloadUrl,
+        storagePath,
+        fileName: replaceFile.name,
+        fileSize: formatFileSize(replaceFile.size),
+        fileType: replaceFile.name.split('.').pop()?.toUpperCase() || 'DOCUMENT',
+        updatedAt: new Date().toISOString()
+      });
+
+      showNotification('success', `File for "${replacingNote.title}" replaced successfully.`);
+      setIsReplaceModalOpen(false);
+      setReplacingNote(null);
+      setReplaceFile(null);
+    } catch (err: any) {
+      showNotification('error', err?.message || 'Failed to replace file.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteNote = async (note: MasterNote) => {
+    if (!window.confirm(`Are you sure you want to delete note "${note.title}"? This cannot be undone.`)) {
+      return;
+    }
+    try {
+      setIsSubmitting(true);
+      if (note.storagePath) {
+        await deleteUnitNoteFile(note.storagePath);
+      }
+      await deleteNote(note.id);
+      showNotification('success', `Note "${note.title}" deleted.`);
+    } catch (err: any) {
+      showNotification('error', err?.message || 'Failed to delete note.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -890,6 +1210,10 @@ export const SyllabusModule: React.FC<SyllabusModuleProps> = ({ initialSubjectId
                       const unitTotalTopics = unit.topics?.length || 0;
                       const unitCompletedTopics = unit.topics ? unit.topics.filter(t => t.completed).length : 0;
                       const unitCoveragePct = unitTotalTopics > 0 ? Math.round((unitCompletedTopics / unitTotalTopics) * 100) : 0;
+                      const unitNotes = notes.filter(n =>
+                        n.subjectId === activeSubject.id &&
+                        (n.unitId === unit.id || (!n.unitId && n.unitOrTopic?.includes(`Unit ${unit.unitNumber}`)))
+                      );
 
                       return (
                         <div key={unit.id} className="bg-white">
@@ -919,6 +1243,19 @@ export const SyllabusModule: React.FC<SyllabusModuleProps> = ({ initialSubjectId
                                   >
                                     {unitCoveragePct}% Covered ({unitCompletedTopics}/{unitTotalTopics} Topics)
                                   </span>
+
+                                  {/* Unit-wise Notes Count Indicator (Requirement 10) */}
+                                  <span
+                                    className={`px-2 py-0.2 rounded text-[10px] font-bold flex items-center gap-1 ${
+                                      unitNotes.length > 0
+                                        ? 'bg-blue-50 text-blue-800 border border-blue-200'
+                                        : 'bg-slate-100 text-slate-500 border border-slate-200'
+                                    }`}
+                                    title={`${unitNotes.length} notes available for Unit ${unit.unitNumber}`}
+                                  >
+                                    <FileText className="w-3 h-3" />
+                                    {unitNotes.length > 0 ? `${unitNotes.length} Note${unitNotes.length === 1 ? '' : 's'}` : 'No notes available'}
+                                  </span>
                                 </div>
                                 {unit.description && (
                                   <p className="text-xs text-slate-500 mt-1 leading-relaxed">
@@ -929,6 +1266,26 @@ export const SyllabusModule: React.FC<SyllabusModuleProps> = ({ initialSubjectId
                             </div>
 
                             <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+                              {/* Unit-wise Upload Notes Action (Requirement 1 & 4) */}
+                              {canManageNotes && (
+                                <button
+                                  onClick={() => {
+                                    setUploadTargetUnit(unit);
+                                    setSelectedNoteFile(null);
+                                    setNoteTitle('');
+                                    setNoteDescription('');
+                                    setNoteMaterialType('Lecture Notes');
+                                    setFileValidationError(null);
+                                    setIsUploadNoteModalOpen(true);
+                                  }}
+                                  className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded font-semibold text-xs flex items-center gap-1 transition-colors cursor-pointer border border-emerald-300"
+                                  title={`Upload study notes for Unit ${unit.unitNumber}`}
+                                >
+                                  <UploadCloud className="w-3.5 h-3.5 text-emerald-600" />
+                                  Upload Notes
+                                </button>
+                              )}
+
                               {canEditCoverage && (
                                 <button
                                   onClick={() => openTopicModal(unit.id)}
@@ -960,99 +1317,256 @@ export const SyllabusModule: React.FC<SyllabusModuleProps> = ({ initialSubjectId
                             </div>
                           </div>
 
-                          {/* Unit Topics Table */}
+                          {/* Unit Topics & Study Material Accordion */}
                           {isExpanded && (
-                            <div className="bg-[#F8FAFC] border-t border-slate-100 px-4 py-3">
-                              {(!unit.topics || unit.topics.length === 0) ? (
-                                <div className="py-4 text-center text-slate-400 text-xs">
-                                  No topics added inside Unit {unit.unitNumber} yet.{' '}
-                                  {canEditCoverage && (
-                                    <button
-                                      onClick={() => openTopicModal(unit.id)}
-                                      className="text-[#4F46E5] font-semibold hover:underline ml-1 cursor-pointer"
-                                    >
-                                      Add First Topic
-                                    </button>
-                                  )}
-                                </div>
-                              ) : (
-                                <div className="space-y-2">
-                                  {unit.topics.map(topic => (
-                                    <div
-                                      key={topic.id}
-                                      className={`p-3 rounded-md border flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-colors ${
-                                        topic.completed
-                                          ? 'bg-emerald-50/40 border-emerald-200'
-                                          : 'bg-white border-slate-200'
-                                      }`}
-                                    >
-                                      <div className="flex items-start gap-3">
-                                        <button
-                                          disabled={!canEditCoverage}
-                                          onClick={() => handleToggleTopic(unit.id, topic.id, topic.completed)}
-                                          className={`mt-0.5 p-0.5 rounded cursor-pointer transition-colors ${
-                                            !canEditCoverage ? 'cursor-not-allowed opacity-60' : ''
-                                          }`}
-                                          title={canEditCoverage ? 'Click to toggle topic completion status' : 'View only'}
-                                        >
-                                          {topic.completed ? (
-                                            <CheckSquare className="w-4 h-4 text-emerald-600" />
-                                          ) : (
-                                            <Square className="w-4 h-4 text-slate-400 hover:text-indigo-600" />
-                                          )}
-                                        </button>
+                            <div className="bg-[#F8FAFC] border-t border-slate-100 px-4 py-3 space-y-4">
+                              {/* 1. Topics Breakdown */}
+                              <div>
+                                <h6 className="text-[11px] font-bold uppercase tracking-wider text-slate-700 mb-2">
+                                  Curriculum Topics ({unitCompletedTopics}/{unitTotalTopics} Covered)
+                                </h6>
+                                {(!unit.topics || unit.topics.length === 0) ? (
+                                  <div className="py-3 text-center text-slate-400 text-xs bg-white rounded border border-dashed border-slate-200">
+                                    No topics added inside Unit {unit.unitNumber} yet.{' '}
+                                    {canEditCoverage && (
+                                      <button
+                                        onClick={() => openTopicModal(unit.id)}
+                                        className="text-[#4F46E5] font-semibold hover:underline ml-1 cursor-pointer"
+                                      >
+                                        Add First Topic
+                                      </button>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="space-y-2">
+                                    {unit.topics.map(topic => (
+                                      <div
+                                        key={topic.id}
+                                        className={`p-3 rounded-md border flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-colors ${
+                                          topic.completed
+                                            ? 'bg-emerald-50/40 border-emerald-200'
+                                            : 'bg-white border-slate-200'
+                                        }`}
+                                      >
+                                        <div className="flex items-start gap-3">
+                                          <button
+                                            disabled={!canEditCoverage}
+                                            onClick={() => handleToggleTopic(unit.id, topic.id, topic.completed)}
+                                            className={`mt-0.5 p-0.5 rounded cursor-pointer transition-colors ${
+                                              !canEditCoverage ? 'cursor-not-allowed opacity-60' : ''
+                                            }`}
+                                            title={canEditCoverage ? 'Click to toggle topic completion status' : 'View only'}
+                                          >
+                                            {topic.completed ? (
+                                              <CheckSquare className="w-4 h-4 text-emerald-600" />
+                                            ) : (
+                                              <Square className="w-4 h-4 text-slate-400 hover:text-indigo-600" />
+                                            )}
+                                          </button>
 
-                                        <div>
-                                          <div className="flex items-center gap-2">
-                                            <h5 className={`font-semibold text-xs ${topic.completed ? 'text-emerald-950 line-through' : 'text-slate-900'}`}>
-                                              {topic.title}
-                                            </h5>
-                                            <span className="text-[10px] text-slate-500 font-mono">
-                                              ({topic.hours || 1} hrs)
-                                            </span>
+                                          <div>
+                                            <div className="flex items-center gap-2">
+                                              <h5 className={`font-semibold text-xs ${topic.completed ? 'text-emerald-950 line-through' : 'text-slate-900'}`}>
+                                                {topic.title}
+                                              </h5>
+                                              <span className="text-[10px] text-slate-500 font-mono">
+                                                ({topic.hours || 1} hrs)
+                                              </span>
+                                            </div>
+                                            {topic.description && (
+                                              <p className="text-[11px] text-slate-500 mt-0.5">
+                                                {topic.description}
+                                              </p>
+                                            )}
                                           </div>
-                                          {topic.description && (
-                                            <p className="text-[11px] text-slate-500 mt-0.5">
-                                              {topic.description}
-                                            </p>
+                                        </div>
+
+                                        <div className="flex items-center gap-3 shrink-0 self-end sm:self-auto">
+                                          {topic.completed ? (
+                                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded border border-emerald-200">
+                                              Covered {topic.completionDate && `(${topic.completionDate})`}
+                                            </span>
+                                          ) : (
+                                            <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                                              Pending
+                                            </span>
+                                          )}
+
+                                          {canEditCoverage && (
+                                            <div className="flex items-center gap-1">
+                                              <button
+                                                onClick={() => openTopicModal(unit.id, topic)}
+                                                className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
+                                                title="Edit Topic"
+                                              >
+                                                <Edit2 className="w-3 h-3" />
+                                              </button>
+                                              <button
+                                                onClick={() => setDeleteConfirmId({ type: 'topic', id: topic.id, parentId: unit.id })}
+                                                className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
+                                                title="Delete Topic"
+                                              >
+                                                <Trash2 className="w-3 h-3" />
+                                              </button>
+                                            </div>
                                           )}
                                         </div>
                                       </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
 
-                                      <div className="flex items-center gap-3 shrink-0 self-end sm:self-auto">
-                                        {topic.completed ? (
-                                          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded border border-emerald-200">
-                                            Covered {topic.completionDate && `(${topic.completionDate})`}
-                                          </span>
-                                        ) : (
-                                          <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                                            Pending
-                                          </span>
-                                        )}
-
-                                        {canEditCoverage && (
-                                          <div className="flex items-center gap-1">
-                                            <button
-                                              onClick={() => openTopicModal(unit.id, topic)}
-                                              className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
-                                              title="Edit Topic"
-                                            >
-                                              <Edit2 className="w-3 h-3" />
-                                            </button>
-                                            <button
-                                              onClick={() => setDeleteConfirmId({ type: 'topic', id: topic.id, parentId: unit.id })}
-                                              className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
-                                              title="Delete Topic"
-                                            >
-                                              <Trash2 className="w-3 h-3" />
-                                            </button>
-                                          </div>
-                                        )}
-                                      </div>
-                                    </div>
-                                  ))}
+                              {/* 2. Unit Study Material & Notes Section (Requirement 6, 8, 9, 11) */}
+                              <div className="pt-3 border-t border-slate-200">
+                                <div className="flex items-center justify-between mb-2.5">
+                                  <div className="flex items-center gap-2">
+                                    <FileText className="w-4 h-4 text-[#4F46E5]" />
+                                    <h6 className="text-[11px] font-bold uppercase tracking-wider text-slate-800">
+                                      Unit Study Material & Notes ({unitNotes.length})
+                                    </h6>
+                                  </div>
+                                  {canManageNotes && (
+                                    <button
+                                      onClick={() => {
+                                        setUploadTargetUnit(unit);
+                                        setSelectedNoteFile(null);
+                                        setNoteTitle('');
+                                        setNoteDescription('');
+                                        setNoteMaterialType('Lecture Notes');
+                                        setFileValidationError(null);
+                                        setIsUploadNoteModalOpen(true);
+                                      }}
+                                      className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 flex items-center gap-1 cursor-pointer bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded border border-emerald-200 transition-colors"
+                                    >
+                                      <Plus className="w-3 h-3" />
+                                      Upload Notes
+                                    </button>
+                                  )}
                                 </div>
-                              )}
+
+                                {unitNotes.length === 0 ? (
+                                  <div className="p-4 rounded-lg border border-dashed border-slate-200 bg-white text-center text-xs text-slate-500">
+                                    <FileText className="w-6 h-6 text-slate-300 mx-auto mb-1.5" />
+                                    <p className="font-semibold text-slate-700">No study material uploaded for this unit yet.</p>
+                                    {canManageNotes ? (
+                                      <p className="text-[11px] text-slate-400 mt-0.5">
+                                        Upload PDFs, lecture slides, question banks, or handwritten notes for students of this section.
+                                      </p>
+                                    ) : (
+                                      <p className="text-[11px] text-slate-400 mt-0.5">
+                                        Your course instructor will upload study notes here as topics are completed.
+                                      </p>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                                    {unitNotes.map(note => {
+                                      return (
+                                        <div
+                                          key={note.id}
+                                          className="p-3 bg-white rounded-lg border border-slate-200 hover:border-indigo-300 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between"
+                                        >
+                                          <div>
+                                            <div className="flex items-start justify-between gap-2">
+                                              <div className="flex items-start gap-2.5 min-w-0">
+                                                <div className="p-2 rounded bg-slate-50 border border-slate-100 shrink-0 mt-0.5">
+                                                  {getFileIcon(note.fileName, note.fileType)}
+                                                </div>
+                                                <div className="min-w-0">
+                                                  <h6 className="font-bold text-xs text-slate-900 truncate" title={note.title}>
+                                                    {note.title}
+                                                  </h6>
+                                                  <p className="text-[11px] text-slate-500 truncate" title={note.fileName || 'Document'}>
+                                                    {note.fileName || 'Attached file'}
+                                                  </p>
+                                                </div>
+                                              </div>
+
+                                              <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">
+                                                {note.materialType || 'Notes'}
+                                              </span>
+                                            </div>
+
+                                            {note.description && (
+                                              <div className="mt-2 p-2 rounded bg-slate-50/70 border border-slate-100 text-[11px] text-slate-600 leading-relaxed italic">
+                                                "{note.description}"
+                                              </div>
+                                            )}
+
+                                            <div className="mt-2.5 flex items-center justify-between text-[10px] text-slate-400 pt-2 border-t border-slate-100">
+                                              <span className="truncate">
+                                                By {note.uploadedByName} ({note.uploadedByRole})
+                                              </span>
+                                              <span className="shrink-0 font-mono font-medium text-slate-600 bg-slate-100 px-1.5 py-0.2 rounded">
+                                                {note.fileSize || 'N/A'}
+                                              </span>
+                                            </div>
+                                          </div>
+
+                                          {/* Note Actions: Open, Download, Edit, Replace, Delete (Requirement 7 & 8) */}
+                                          <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between gap-1 text-xs">
+                                            <div className="flex items-center gap-1.5">
+                                              <button
+                                                onClick={() => handleViewNote(note)}
+                                                className="px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-[11px] flex items-center gap-1 transition-colors cursor-pointer"
+                                                title="View note in browser"
+                                              >
+                                                <Eye className="w-3 h-3" />
+                                                Open
+                                              </button>
+                                              <button
+                                                onClick={() => handleDownloadNote(note)}
+                                                className="px-2.5 py-1 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold text-[11px] flex items-center gap-1 transition-colors cursor-pointer"
+                                                title="Download note file"
+                                              >
+                                                <Download className="w-3 h-3" />
+                                                Download
+                                              </button>
+                                            </div>
+
+                                            {canManageNotes && (
+                                              <div className="flex items-center gap-1">
+                                                <button
+                                                  onClick={() => {
+                                                    setEditingNote(note);
+                                                    setEditNoteTitle(note.title);
+                                                    setEditNoteDesc(note.description || '');
+                                                    setEditNoteMaterialType(note.materialType || 'Lecture Notes');
+                                                    setIsEditNoteModalOpen(true);
+                                                  }}
+                                                  className="p-1 rounded text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
+                                                  title="Edit Note Details"
+                                                >
+                                                  <Edit2 className="w-3 h-3" />
+                                                </button>
+                                                <button
+                                                  onClick={() => {
+                                                    setReplacingNote(note);
+                                                    setIsReplaceModalOpen(true);
+                                                    setReplaceFile(null);
+                                                  }}
+                                                  className="p-1 rounded text-slate-400 hover:text-blue-600 transition-colors cursor-pointer"
+                                                  title="Replace File"
+                                                >
+                                                  <RefreshCw className="w-3 h-3" />
+                                                </button>
+                                                <button
+                                                  onClick={() => handleDeleteNote(note)}
+                                                  className="p-1 rounded text-slate-400 hover:text-red-600 transition-colors cursor-pointer"
+                                                  title="Delete Note"
+                                                >
+                                                  <Trash2 className="w-3 h-3" />
+                                                </button>
+                                              </div>
+                                            )}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           )}
                         </div>
@@ -1433,6 +1947,368 @@ export const SyllabusModule: React.FC<SyllabusModuleProps> = ({ initialSubjectId
                 Delete {deleteConfirmId.type}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5. Upload Unit Notes Modal (Requirements 1, 3, 4, 5, 12, 16, 17) */}
+      {isUploadNoteModalOpen && uploadTargetUnit && activeSubject && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden animate-in zoom-in-95">
+            <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+              <div className="flex items-center gap-2">
+                <UploadCloud className="w-4 h-4 text-[#4F46E5]" />
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">
+                    Upload Notes — Unit {uploadTargetUnit.unitNumber}: {uploadTargetUnit.title}
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    {activeSubject.code} • {activeSubject.name} (Sec {activeSubject.section || 'A'})
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  if (!isUploadingNote) {
+                    setIsUploadNoteModalOpen(false);
+                    setSelectedNoteFile(null);
+                  }
+                }}
+                disabled={isUploadingNote}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-md cursor-pointer disabled:opacity-50"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleUploadNoteSubmit} className="p-5 space-y-4 text-xs">
+              {/* File Dropzone / Selector */}
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1.5">
+                  Select Document / Notes File <span className="text-red-500">*</span>
+                </label>
+                <div
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={e => {
+                    e.preventDefault();
+                    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                      handleNoteFileChange(e.dataTransfer.files[0]);
+                    }
+                  }}
+                  className={`border-2 border-dashed rounded-lg p-5 text-center transition-all ${
+                    selectedNoteFile
+                      ? 'border-emerald-300 bg-emerald-50/40'
+                      : 'border-slate-300 hover:border-indigo-400 bg-slate-50/50'
+                  }`}
+                >
+                  <input
+                    type="file"
+                    id="unit-note-file-input"
+                    className="hidden"
+                    accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.png,.jpg,.jpeg,.webp,.txt"
+                    onChange={e => {
+                      if (e.target.files && e.target.files[0]) {
+                        handleNoteFileChange(e.target.files[0]);
+                      }
+                    }}
+                  />
+                  {selectedNoteFile ? (
+                    <div className="flex items-center justify-between gap-3 text-left">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2.5 rounded bg-white border border-emerald-200">
+                          {getFileIcon(selectedNoteFile.name)}
+                        </div>
+                        <div>
+                          <p className="font-bold text-slate-900 truncate max-w-xs">{selectedNoteFile.name}</p>
+                          <p className="text-[11px] text-slate-500">
+                            {formatFileSize(selectedNoteFile.size)} • {selectedNoteFile.name.split('.').pop()?.toUpperCase()}
+                          </p>
+                        </div>
+                      </div>
+                      <label
+                        htmlFor="unit-note-file-input"
+                        className="px-2.5 py-1 text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 bg-white border border-slate-200 rounded cursor-pointer shrink-0"
+                      >
+                        Change File
+                      </label>
+                    </div>
+                  ) : (
+                    <label htmlFor="unit-note-file-input" className="cursor-pointer block">
+                      <FileUp className="w-8 h-8 text-slate-400 mx-auto mb-2" />
+                      <p className="font-semibold text-slate-800">
+                        Click to browse or drag and drop study notes file
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        Supported: PDF, DOC, DOCX, PPT, PPTX, XLS, XLSX, Images (Max 25 MB)
+                      </p>
+                    </label>
+                  )}
+                </div>
+                {fileValidationError && (
+                  <p className="text-[11px] text-red-600 font-semibold mt-1 flex items-center gap-1">
+                    <AlertCircle className="w-3.5 h-3.5" />
+                    {fileValidationError}
+                  </p>
+                )}
+              </div>
+
+              {/* Note Title */}
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Note Display Title <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Unit 1 — Magnetic Circuit Principles & Solved Examples"
+                  value={noteTitle}
+                  onChange={e => setNoteTitle(e.target.value)}
+                  className="w-full text-xs p-2 rounded-md border border-[#E2E8F0] bg-white font-medium text-slate-900 focus:ring-1 focus:ring-[#4F46E5]"
+                />
+              </div>
+
+              {/* Material Type */}
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Material Category</label>
+                <select
+                  value={noteMaterialType}
+                  onChange={e => setNoteMaterialType(e.target.value as MaterialType)}
+                  className="w-full text-xs p-2 rounded-md border border-[#E2E8F0] bg-white font-medium text-slate-900 focus:ring-1 focus:ring-[#4F46E5]"
+                >
+                  <option value="Lecture Notes">Lecture Notes</option>
+                  <option value="Question Bank">Question Bank / Important Questions</option>
+                  <option value="Lab Manual">Lab Manual / Practical Guide</option>
+                  <option value="Reference Material">Reference Material</option>
+                  <option value="Assignment">Assignment / Problem Set</option>
+                  <option value="Syllabus Copy">Syllabus Copy</option>
+                </select>
+              </div>
+
+              {/* Optional Description */}
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Optional Short Description
+                </label>
+                <textarea
+                  rows={2}
+                  placeholder="e.g. Class notes covering MMF, reluctance, flux and solved numerical problems from lecture."
+                  value={noteDescription}
+                  onChange={e => setNoteDescription(e.target.value)}
+                  className="w-full text-xs p-2 rounded-md border border-[#E2E8F0] bg-white font-medium text-slate-900 focus:ring-1 focus:ring-[#4F46E5]"
+                />
+                <p className="text-[10px] text-slate-400 mt-0.5">
+                  This note will be strictly accessible to students of {activeSubject.department} Sec {activeSubject.section || 'A'}.
+                </p>
+              </div>
+
+              {/* Upload Progress Bar (Requirement 4 & 17) */}
+              {isUploadingNote && (
+                <div className="space-y-1.5 p-3 rounded-lg bg-indigo-50/70 border border-indigo-100">
+                  <div className="flex items-center justify-between text-[11px] font-semibold text-indigo-900">
+                    <span className="flex items-center gap-1.5">
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-600" />
+                      Uploading… {uploadProgress}%
+                    </span>
+                    <span>Please wait...</span>
+                  </div>
+                  <div className="w-full bg-indigo-200 h-2 rounded-full overflow-hidden">
+                    <div
+                      className="bg-indigo-600 h-full rounded-full transition-all duration-300"
+                      style={{ width: `${uploadProgress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={isUploadingNote}
+                  onClick={() => {
+                    setIsUploadNoteModalOpen(false);
+                    setSelectedNoteFile(null);
+                  }}
+                  className="px-3.5 py-1.5 rounded-md text-slate-600 hover:bg-slate-100 font-semibold cursor-pointer disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isUploadingNote || !selectedNoteFile}
+                  className="px-4 py-2 rounded-md bg-[#0F172A] hover:bg-slate-800 text-white font-semibold flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-95 disabled:opacity-50"
+                >
+                  <UploadCloud className="w-3.5 h-3.5 text-emerald-400" />
+                  {isUploadingNote ? `Uploading… ${uploadProgress}%` : 'Upload Notes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 6. Edit Note Details Modal (Requirement 7) */}
+      {isEditNoteModalOpen && editingNote && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden animate-in zoom-in-95">
+            <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+              <div className="flex items-center gap-2">
+                <Edit2 className="w-4 h-4 text-[#4F46E5]" />
+                <h3 className="font-bold text-slate-900 text-sm">Edit Note Details</h3>
+              </div>
+              <button
+                onClick={() => {
+                  setIsEditNoteModalOpen(false);
+                  setEditingNote(null);
+                }}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-md cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditNote} className="p-5 space-y-3.5 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Title</label>
+                <input
+                  type="text"
+                  required
+                  value={editNoteTitle}
+                  onChange={e => setEditNoteTitle(e.target.value)}
+                  className="w-full text-xs p-2 rounded-md border border-[#E2E8F0] bg-white font-medium text-slate-900 focus:ring-1 focus:ring-[#4F46E5]"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Material Category</label>
+                <select
+                  value={editNoteMaterialType}
+                  onChange={e => setEditNoteMaterialType(e.target.value as MaterialType)}
+                  className="w-full text-xs p-2 rounded-md border border-[#E2E8F0] bg-white font-medium text-slate-900 focus:ring-1 focus:ring-[#4F46E5]"
+                >
+                  <option value="Lecture Notes">Lecture Notes</option>
+                  <option value="Question Bank">Question Bank / Important Questions</option>
+                  <option value="Lab Manual">Lab Manual / Practical Guide</option>
+                  <option value="Reference Material">Reference Material</option>
+                  <option value="Assignment">Assignment / Problem Set</option>
+                  <option value="Syllabus Copy">Syllabus Copy</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Description</label>
+                <textarea
+                  rows={3}
+                  value={editNoteDesc}
+                  onChange={e => setEditNoteDesc(e.target.value)}
+                  className="w-full text-xs p-2 rounded-md border border-[#E2E8F0] bg-white font-medium text-slate-900 focus:ring-1 focus:ring-[#4F46E5]"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsEditNoteModalOpen(false);
+                    setEditingNote(null);
+                  }}
+                  className="px-3.5 py-1.5 rounded-md text-slate-600 hover:bg-slate-100 font-semibold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="px-4 py-2 rounded-md bg-[#0F172A] hover:bg-slate-800 text-white font-semibold flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-95 disabled:opacity-50"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  {isSubmitting ? 'Saving...' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 7. Replace Note File Modal (Requirement 7) */}
+      {isReplaceModalOpen && replacingNote && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden animate-in zoom-in-95">
+            <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+              <div className="flex items-center gap-2">
+                <RefreshCw className="w-4 h-4 text-[#4F46E5]" />
+                <h3 className="font-bold text-slate-900 text-sm">Replace Document File</h3>
+              </div>
+              <button
+                onClick={() => {
+                  setIsReplaceModalOpen(false);
+                  setReplacingNote(null);
+                  setReplaceFile(null);
+                }}
+                disabled={isSubmitting}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-md cursor-pointer disabled:opacity-50"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleReplaceFileSubmit} className="p-5 space-y-4 text-xs">
+              <div>
+                <p className="text-slate-600 mb-1">
+                  Current Document: <strong className="text-slate-900">{replacingNote.fileName || replacingNote.title}</strong>
+                </p>
+                <p className="text-[11px] text-slate-400 mb-3">
+                  Uploading a new file will safely replace the existing Storage file without leaving orphaned files.
+                </p>
+
+                <label className="block font-semibold text-slate-700 mb-1.5">Select Replacement File *</label>
+                <input
+                  type="file"
+                  required
+                  accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.png,.jpg,.jpeg,.webp,.txt"
+                  onChange={e => {
+                    if (e.target.files && e.target.files[0]) {
+                      const f = e.target.files[0];
+                      const val = validateNoteFile(f);
+                      if (!val.valid) {
+                        showNotification('error', val.error || 'Invalid file');
+                        setReplaceFile(null);
+                      } else {
+                        setReplaceFile(f);
+                      }
+                    }
+                  }}
+                  className="w-full text-xs p-2 rounded-md border border-[#E2E8F0] bg-white font-medium text-slate-900 focus:ring-1 focus:ring-[#4F46E5]"
+                />
+                {replaceFile && (
+                  <p className="text-[11px] text-emerald-600 font-semibold mt-1">
+                    Selected: {replaceFile.name} ({formatFileSize(replaceFile.size)})
+                  </p>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={isSubmitting}
+                  onClick={() => {
+                    setIsReplaceModalOpen(false);
+                    setReplacingNote(null);
+                    setReplaceFile(null);
+                  }}
+                  className="px-3.5 py-1.5 rounded-md text-slate-600 hover:bg-slate-100 font-semibold cursor-pointer disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting || !replaceFile}
+                  className="px-4 py-2 rounded-md bg-[#0F172A] hover:bg-slate-800 text-white font-semibold flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-95 disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSubmitting ? 'animate-spin' : ''}`} />
+                  {isSubmitting ? 'Replacing...' : 'Upload & Replace'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

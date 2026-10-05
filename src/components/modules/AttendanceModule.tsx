@@ -27,6 +27,7 @@ import { useAcademicData } from '../../context/AcademicDataContext';
 import { useAuth } from '../../context/AuthContext';
 import { StudentAttendanceStatus, AttendanceSession } from '../../types';
 import { uploadAttendancePhoto } from '../../services/storage';
+import { sortStudentsByRollNumber } from '../../lib/academicSort';
 
 export const AttendanceModule: React.FC = () => {
   const { currentRole, currentUser, actualRole, isSimulatingRole } = useAuth();
@@ -178,6 +179,16 @@ export const AttendanceModule: React.FC = () => {
     }
   }, [availableSubjects, selectedSubjectId]);
 
+  // Automatically synchronize section to match subject's designated section/classroom
+  React.useEffect(() => {
+    if (currentSubject?.section) {
+      const formatted = currentSubject.section.startsWith('Section')
+        ? currentSubject.section
+        : `Section ${currentSubject.section}`;
+      setSection(formatted);
+    }
+  }, [currentSubject]);
+
   // Dynamic automatic attendance roster generation from active Firestore students
   React.useEffect(() => {
     if (editingSessionId) return;
@@ -188,7 +199,8 @@ export const AttendanceModule: React.FC = () => {
     }
 
     const normalizeSec = (secStr?: string) => (secStr || '').replace(/^Section\s+/i, '').trim().toUpperCase();
-    const currentSecNorm = normalizeSec(section);
+    const effectiveSec = currentSubject.section || section;
+    const currentSecNorm = normalizeSec(effectiveSec);
 
     const matchingStudents = students.filter(s => {
       const matchDept =
@@ -200,7 +212,7 @@ export const AttendanceModule: React.FC = () => {
           (s.departmentId?.toLowerCase().includes(currentSubject.departmentCode.toLowerCase()) ||
             s.departmentName?.toLowerCase().includes(currentSubject.departmentCode.toLowerCase())));
       const matchSem = !currentSubject.semester || s.semester === currentSubject.semester || s.year === Math.ceil(currentSubject.semester / 2);
-      const matchSection = !section || section.trim() === '' || normalizeSec(s.section) === currentSecNorm;
+      const matchSection = !effectiveSec || effectiveSec.trim() === '' || normalizeSec(s.section) === currentSecNorm;
       const matchStatus = s.status === 'active';
       return matchDept && matchSem && matchSection && matchStatus;
     });
@@ -210,7 +222,7 @@ export const AttendanceModule: React.FC = () => {
       const alreadyInStudents = matchingStudents.some(s => s.userId === u.id || s.email === u.email || s.id === u.id);
       if (alreadyInStudents) return false;
       const matchDept = !currentSubject.department || u.department.toLowerCase().includes(currentSubject.department.toLowerCase());
-      const matchSection = !section || section.trim() === '' || !u.section || normalizeSec(u.section) === currentSecNorm;
+      const matchSection = !effectiveSec || effectiveSec.trim() === '' || !u.section || normalizeSec(u.section) === currentSecNorm;
       return matchDept && matchSection;
     });
 
@@ -239,7 +251,8 @@ export const AttendanceModule: React.FC = () => {
       }
     }
 
-    setRoster(uniqueRoster);
+    // Strict numerical sorting by roll number / USN
+    setRoster(sortStudentsByRollNumber(uniqueRoster));
   }, [selectedSubjectId, section, students, users, currentSubject, editingSessionId]);
 
   const toggleStudentStatus = (studentId: string, status: 'present' | 'absent' | 'late') => {
@@ -578,7 +591,7 @@ export const AttendanceModule: React.FC = () => {
                 >
                   {availableSubjects.map(s => (
                     <option key={s.id} value={s.id}>
-                      {s.code} - {s.name} ({s.type.toUpperCase()})
+                      {s.code} - {s.name} ({s.year ? `${s.year}yr ` : ''}{s.section ? (s.section.startsWith('Section') ? s.section : `Section ${s.section}`) : 'All Sections'}) [{s.type.toUpperCase()}]
                     </option>
                   ))}
                 </select>

@@ -25,7 +25,6 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { useAcademicData } from '../../context/AcademicDataContext';
 import { UserProfile, Subject } from '../../types';
-import { INITIAL_DEPARTMENTS } from '../../data/mockData';
 
 export const CompleteProfilePage: React.FC = () => {
   const { currentUser, actualRole, updateCurrentUserProfile, logout } = useAuth();
@@ -36,7 +35,7 @@ export const CompleteProfilePage: React.FC = () => {
     updateSubject
   } = useAcademicData();
 
-  const availableDepts = dbDepartments && dbDepartments.length > 0 ? dbDepartments : INITIAL_DEPARTMENTS;
+  const availableDepts = dbDepartments || [];
 
   const isStudent = currentUser.role === 'student' || actualRole === 'student';
   const isLabAssistant = currentUser.role === 'lab_assistant' || actualRole === 'lab_assistant';

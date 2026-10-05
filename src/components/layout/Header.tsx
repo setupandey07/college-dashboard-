@@ -21,7 +21,7 @@ import { filterQueriesForUser } from '../../lib/queryPrivacy';
 
 interface HeaderProps {
   currentTab: string;
-  onOpenAiAssistant: () => void;
+  onOpenAiAssistant?: () => void;
   onNavigateToProfile: () => void;
   onOpenMobileMenu: () => void;
 }
@@ -176,16 +176,6 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="w-2 h-2 rounded-full bg-[#10B981] animate-pulse" />
             <span className="text-[11px]">Live • AY 2026–27</span>
           </div>
-
-          {/* AI Copilot Button */}
-          <button
-            onClick={onOpenAiAssistant}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-[#166E52] bg-[#EBF5EF] hover:bg-[#DEECE2] border border-[#CDE5D7] rounded-xl transition-colors cursor-pointer"
-            title="Institutional Academic Assistant"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-[#1B8B67]" />
-            <span className="hidden sm:inline">AI Copilot</span>
-          </button>
 
           {/* Role Selector Button & Dropdown matching reference */}
           {isDevRoleSwitcherActive && (

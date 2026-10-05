@@ -79,17 +79,23 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({
   const studentSec = isRealStudent ? (currentUser.section || '') : (currentUser.section || '');
   const normalizedSec = (studentSec || '').replace(/^Section\s+/i, '').trim().toUpperCase();
 
-  // Filter subjects matching department, semester, and section
+  // Filter subjects strictly matching student's department, year/semester, and section
   const myClassSubjects = subjects.filter(s => {
-    const sDept = (s.department || '').trim().toLowerCase();
+    const sDept = (s.departmentCode || s.department || '').trim().toLowerCase();
     const deptMatch =
-      !s.department ||
       sDept === studentDeptCode.toLowerCase() ||
-      sDept === studentDeptName.toLowerCase();
-    const semMatch = !s.semester || studentSem === 0 || s.semester === studentSem;
+      sDept === studentDeptName.toLowerCase() ||
+      (studentDeptCode && (s.departmentCode || '').toUpperCase() === studentDeptCode.toUpperCase());
+    if (!deptMatch) return false;
+
+    const sYear = s.year || (s.semester ? Math.ceil(s.semester / 2) : 0);
+    const stuYear = studentSem > 0 ? Math.ceil(studentSem / 2) : 0;
+    const yearMatch = stuYear === 0 || sYear === 0 || sYear === stuYear || s.semester === studentSem;
+    if (!yearMatch) return false;
+
     const sSecNorm = (s.section || '').replace(/^Section\s+/i, '').trim().toUpperCase();
-    const secMatch = !s.section || s.section === 'All' || !normalizedSec || sSecNorm === normalizedSec;
-    return deptMatch && semMatch && secMatch;
+    const secMatch = !normalizedSec || sSecNorm === normalizedSec;
+    return secMatch;
   });
 
   // Filter section details

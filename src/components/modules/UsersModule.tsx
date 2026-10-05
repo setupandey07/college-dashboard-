@@ -28,6 +28,7 @@ import { useAuth } from '../../context/AuthContext';
 import { UserProfile, UserRole } from '../../types';
 import { updateUserProfile } from '../../services/firestore/users';
 import { updateStudentProfile } from '../../services/firestore/students';
+import { compareRollNumbers } from '../../lib/academicSort';
 
 export const UsersModule: React.FC = () => {
   const { currentUser, currentRole } = useAuth();
@@ -245,6 +246,14 @@ export const UsersModule: React.FC = () => {
       (u.regId && u.regId.toLowerCase().includes(search.toLowerCase())) ||
       (u.department && u.department.toLowerCase().includes(search.toLowerCase()));
     return matchesRole && matchesSearch;
+  }).sort((a, b) => {
+    // Sort students by official roll number / USN
+    if (a.role === 'student' && b.role === 'student') {
+      return compareRollNumbers(a.regId, b.regId);
+    }
+    if (a.role === 'student') return 1;
+    if (b.role === 'student') return -1;
+    return a.name.localeCompare(b.name);
   });
 
   const getInitials = (name: string) => {

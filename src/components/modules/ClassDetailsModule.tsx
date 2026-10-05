@@ -37,6 +37,7 @@ import {
   TimetableSlotConfig,
   subscribeTimetable
 } from '../../services/firestore/timetables';
+import { sortStudentsByRollNumber } from '../../lib/academicSort';
 
 interface ClassDetailsModuleProps {
   section: AcademicSection;
@@ -63,7 +64,8 @@ export const ClassDetailsModule: React.FC<ClassDetailsModuleProps> = ({
     createSubject,
     updateSubject,
     deleteSubject,
-    updateTimetableSlot
+    updateTimetableSlot,
+    assignLabTimetableSlots
   } = useAcademicData();
 
   const isAdmin = currentRole === 'admin';
@@ -78,6 +80,7 @@ export const ClassDetailsModule: React.FC<ClassDetailsModuleProps> = ({
   const [selectedSlotForEdit, setSelectedSlotForEdit] = useState<{ day: TimetableDay; slot: TimetableSlotConfig } | null>(null);
   const [selectedSubjectIdForSlot, setSelectedSubjectIdForSlot] = useState<string>('');
   const [slotRoomOverride, setSlotRoomOverride] = useState<string>('');
+  const [isLabSessionMode, setIsLabSessionMode] = useState<boolean>(false);
 
   // Class Metadata Editing State
   const [isEditingMetadata, setIsEditingMetadata] = useState(false);
@@ -115,19 +118,28 @@ export const ClassDetailsModule: React.FC<ClassDetailsModuleProps> = ({
   }, [section.id]);
 
   // 2. Strict Department & Class Isolation for Subjects
-  // Only subjects belonging to this department and assigned to this class / academic year
+  // Only subjects belonging to this department and assigned to this specific class / academic year / section
   const classSubjects = subjects.filter(sub => {
     const matchDept =
       sub.department?.toLowerCase() === department.name.toLowerCase() ||
       sub.department?.toLowerCase() === department.code.toLowerCase() ||
       (sub as any).departmentCode?.toLowerCase() === department.code.toLowerCase();
 
-    // Match year or section if defined
-    const subYearNum = sub.year || (sub.semester ? Math.ceil(sub.semester / 2) : undefined);
-    const matchYear = !subYearNum || subYearNum === section.yearNumber;
-    const matchSec = !sub.section || sub.section === section.sectionName || sub.section === section.sectionName.replace('Section ', '').trim();
+    if (!matchDept) return false;
 
-    return matchDept && matchYear && matchSec;
+    // Explicit classroom match: if classId matches, it's definitively for this classroom
+    if (sub.classId && sub.classId === section.id) return true;
+
+    // Strict year match
+    const subYearNum = sub.year || (sub.semester ? Math.ceil(sub.semester / 2) : undefined);
+    const matchYear = subYearNum === section.yearNumber;
+
+    // Strict section match: Section A must NEVER show Section B subjects!
+    const normSubSec = (sub.section || '').replace(/^Section\s+/i, '').trim().toUpperCase();
+    const normClassSec = section.sectionName.replace(/^Section\s+/i, '').trim().toUpperCase();
+    const matchSec = normSubSec === normClassSec;
+
+    return matchYear && matchSec;
   });
 
   // Department faculty users
@@ -138,15 +150,59 @@ export const ClassDetailsModule: React.FC<ClassDetailsModuleProps> = ({
        u.department?.toLowerCase() === department.name.toLowerCase())
   );
 
-  // Enrolled students belonging to this department and class/section
-  const enrolledStudents = students.filter(s => {
-    const matchDept =
-      s.departmentName?.toLowerCase() === department.name.toLowerCase() ||
-      s.departmentId?.toLowerCase().includes(department.code.toLowerCase());
-    const matchYear = s.year === section.yearNumber;
-    const matchSec = !s.section || s.section === section.sectionName || s.section === section.sectionName.replace('Section ', '').trim();
-    return matchDept && matchYear && matchSec;
-  });
+  // Enrolled students belonging to this department and class/section (strictly sorted by Roll Number)
+  const enrolledStudents = React.useMemo(() => {
+    const normClassSec = section.sectionName.replace(/^Section\s+/i, '').trim().toUpperCase();
+    const deptCodeUpper = department.code.toUpperCase().trim();
+    const deptNameLower = department.name.toLowerCase().trim();
+
+    const matchingStudents = students.filter(s => {
+      const matchDept =
+        s.departmentName?.toLowerCase().includes(deptNameLower) ||
+        s.departmentId?.toUpperCase().includes(deptCodeUpper) ||
+        s.departmentName?.toUpperCase().includes(deptCodeUpper);
+      const matchYear = s.year === section.yearNumber;
+      const sSec = (s.section || '').replace(/^Section\s+/i, '').trim().toUpperCase();
+      const matchSec = sSec === normClassSec;
+      return matchDept && matchYear && matchSec && s.status === 'active';
+    });
+
+    const matchingUsers = users.filter(u => {
+      if (u.role !== 'student' || u.status !== 'active') return false;
+      const already = matchingStudents.some(s => s.userId === u.id || s.email === u.email);
+      if (already) return false;
+      const uDeptCode = (u.departmentCode || '').toUpperCase().trim();
+      const uDeptName = (u.department || '').toLowerCase().trim();
+      const matchDept = uDeptCode === deptCodeUpper || uDeptName === deptNameLower;
+      const uYear = u.semester ? Math.ceil(u.semester / 2) : 0;
+      const matchYear = uYear === section.yearNumber;
+      const uSec = (u.section || '').replace(/^Section\s+/i, '').trim().toUpperCase();
+      const matchSec = uSec === normClassSec;
+      return matchDept && matchYear && matchSec;
+    });
+
+    const combined = [
+      ...matchingStudents,
+      ...matchingUsers.map(u => ({
+        id: u.id,
+        userId: u.id,
+        name: u.name,
+        email: u.email,
+        rollNumber: u.regId,
+        registrationNumber: u.regId,
+        departmentId: u.departmentCode || department.code,
+        departmentName: u.department || department.name,
+        year: section.yearNumber,
+        semester: section.yearNumber * 2,
+        section: section.sectionName,
+        admissionYear: u.admissionYear || 2024,
+        phone: u.phone || '',
+        status: 'active' as const
+      }))
+    ];
+
+    return sortStudentsByRollNumber(combined);
+  }, [students, users, department, section]);
 
   // Calculate Class Strength
   const enrolledCount = enrolledStudents.length;
@@ -287,7 +343,8 @@ export const ClassDetailsModule: React.FC<ClassDetailsModuleProps> = ({
     setIsSubmitting(true);
     try {
       if (!selectedSubjectIdForSlot) {
-        // Clear slot
+        // Clear slot - if part of a lab session, automatically releases all 3 consecutive slots
+        const existingCell = timetable?.schedule?.[selectedSlotForEdit.day]?.[selectedSlotForEdit.slot.id];
         await updateTimetableSlot(
           section.id,
           department.code,
@@ -297,7 +354,11 @@ export const ClassDetailsModule: React.FC<ClassDetailsModuleProps> = ({
           selectedSlotForEdit.slot.id,
           null
         );
-        showNotification('success', `Slot ${selectedSlotForEdit.day} ${selectedSlotForEdit.slot.timeRange} cleared.`);
+        if (existingCell?.labGroupId) {
+          showNotification('success', `Released 3-period Lab practical session (${existingCell.subjectCode}).`);
+        } else {
+          showNotification('success', `Slot ${selectedSlotForEdit.day} ${selectedSlotForEdit.slot.timeRange} cleared.`);
+        }
       } else {
         const sub = classSubjects.find(s => s.id === selectedSubjectIdForSlot);
         if (!sub) {
@@ -305,27 +366,56 @@ export const ClassDetailsModule: React.FC<ClassDetailsModuleProps> = ({
           return;
         }
 
+        const isLab = isLabSessionMode || sub.type === 'lab';
+
         const cell: TimetableCell = {
           subjectId: sub.id,
           subjectCode: sub.code, // Displays ONLY the subject code in timetable cell
           subjectName: sub.name,
           facultyId: sub.facultyId,
           facultyName: sub.facultyName,
-          roomNumber: slotRoomOverride.trim() || section.roomNumber || 'Room 101',
-          type: sub.type,
+          roomNumber: slotRoomOverride.trim() || section.roomNumber || (isLab ? 'Lab 101' : 'Room 101'),
+          type: isLab ? 'lab' : sub.type,
           credits: sub.credits
         };
 
-        await updateTimetableSlot(
-          section.id,
-          department.code,
-          section.academicYear,
-          section.sectionName,
-          selectedSlotForEdit.day,
-          selectedSlotForEdit.slot.id,
-          cell
-        );
-        showNotification('success', `Assigned ${sub.code} to ${selectedSlotForEdit.day} ${selectedSlotForEdit.slot.timeRange}.`);
+        if (isLab) {
+          // Lab occupies 3 consecutive slots starting at p1, p2, or p5
+          const validLabStarts = ['p1', 'p2', 'p5'];
+          if (!validLabStarts.includes(selectedSlotForEdit.slot.id)) {
+            showNotification(
+              'error',
+              'A 3-slot Lab must begin at Period 1 (9:00 AM), Period 2 (10:00 AM), or Period 5 (2:00 PM) to occupy 3 consecutive class periods.'
+            );
+            setIsSubmitting(false);
+            return;
+          }
+
+          const res = await assignLabTimetableSlots(
+            section.id,
+            department.code,
+            section.academicYear,
+            section.sectionName,
+            selectedSlotForEdit.day,
+            selectedSlotForEdit.slot.id,
+            cell
+          );
+          showNotification(
+            'success',
+            `Assigned 3-slot Lab for ${sub.code} on ${selectedSlotForEdit.day} (${res.affectedSlotIds.map(s => s.toUpperCase()).join(', ')}).`
+          );
+        } else {
+          await updateTimetableSlot(
+            section.id,
+            department.code,
+            section.academicYear,
+            section.sectionName,
+            selectedSlotForEdit.day,
+            selectedSlotForEdit.slot.id,
+            cell
+          );
+          showNotification('success', `Assigned ${sub.code} to ${selectedSlotForEdit.day} ${selectedSlotForEdit.slot.timeRange}.`);
+        }
       }
       setSelectedSlotForEdit(null);
     } catch (err: any) {
@@ -668,6 +758,7 @@ export const ClassDetailsModule: React.FC<ClassDetailsModuleProps> = ({
                               setSelectedSlotForEdit({ day, slot });
                               setSelectedSubjectIdForSlot(cell?.subjectId || '');
                               setSlotRoomOverride(cell?.roomNumber || section.roomNumber || '');
+                              setIsLabSessionMode(Boolean(cell?.isLabSession || cell?.type === 'lab'));
                             }
                           }}
                           className={`py-2.5 px-2 border-l border-slate-100 transition-all ${
@@ -675,15 +766,20 @@ export const ClassDetailsModule: React.FC<ClassDetailsModuleProps> = ({
                           }`}
                         >
                           {cell ? (
-                            /* Timetable Cell: Displays ONLY the Subject Code in cell (Requirement 6) */
+                            /* Timetable Cell: Displays Subject Code and 3-slot Lab indicator if lab */
                             <div
                               className={`p-2 rounded border transition-all text-center group relative ${
-                                cell.type === 'lab'
-                                  ? 'bg-amber-50 border-amber-200 text-amber-900'
+                                cell.isLabSession || cell.type === 'lab'
+                                  ? 'bg-amber-50/90 border-amber-300 text-amber-950 ring-1 ring-amber-200/50'
                                   : 'bg-indigo-50 border-indigo-200 text-indigo-950'
                               }`}
                               title={`${cell.subjectName} • ${cell.facultyName || 'No Faculty'} • ${cell.roomNumber || 'Room N/A'}`}
                             >
+                              {(cell.isLabSession || cell.type === 'lab') && (
+                                <span className="inline-block text-[9px] font-black uppercase tracking-wider px-1.5 py-0.2 rounded bg-amber-200/90 text-amber-950 border border-amber-300/80 mb-0.5">
+                                  🔬 Lab {cell.labSlotIndex !== undefined ? `(${cell.labSlotIndex + 1}/3)` : ''}
+                                </span>
+                              )}
                               <span className="font-mono font-black text-xs block text-[#0F172A] tracking-wide">
                                 {cell.subjectCode}
                               </span>
@@ -694,12 +790,22 @@ export const ClassDetailsModule: React.FC<ClassDetailsModuleProps> = ({
 
                               {/* Hover Tooltip Card */}
                               <div className="hidden group-hover:block absolute z-20 bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 p-2.5 bg-slate-900 text-white rounded-md shadow-lg text-[10px] text-left pointer-events-none animate-in fade-in zoom-in-95 duration-150">
-                                <p className="font-bold text-amber-300">{cell.subjectCode}</p>
+                                <div className="flex items-center justify-between">
+                                  <p className="font-bold text-amber-300">{cell.subjectCode}</p>
+                                  {(cell.isLabSession || cell.type === 'lab') && (
+                                    <span className="text-[9px] bg-amber-400 text-slate-950 px-1 font-bold rounded">
+                                      3-Slot Lab
+                                    </span>
+                                  )}
+                                </div>
                                 <p className="font-medium text-slate-200 line-clamp-2 mt-0.5">{cell.subjectName}</p>
                                 <div className="mt-1 pt-1 border-t border-slate-700 text-slate-400 space-y-0.5">
                                   <p>Faculty: <span className="text-white">{cell.facultyName || 'Unassigned'}</span></p>
                                   <p>Room: <span className="text-white">{cell.roomNumber || section.roomNumber || 'N/A'}</span></p>
                                   <p>Type: <span className="capitalize text-white">{cell.type || 'Theory'}</span></p>
+                                  {cell.isLabSession && (
+                                    <p className="text-amber-300 font-semibold">Slot {((cell.labSlotIndex ?? 0) + 1)} of 3-slot continuous session</p>
+                                  )}
                                 </div>
                               </div>
                             </div>
@@ -1215,6 +1321,20 @@ export const ClassDetailsModule: React.FC<ClassDetailsModuleProps> = ({
             </div>
 
             <div className="p-5 space-y-4">
+              {(() => {
+                const currentCell = selectedSlotForEdit ? timetable?.schedule?.[selectedSlotForEdit.day]?.[selectedSlotForEdit.slot.id] : null;
+                return currentCell?.labGroupId ? (
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900">
+                    <p className="font-bold flex items-center gap-1.5">
+                      <span>🔬</span> Active 3-Slot Lab Practical ({currentCell.subjectCode})
+                    </p>
+                    <p className="text-[11px] text-amber-700 mt-1">
+                      Period {(currentCell.labSlotIndex ?? 0) + 1} of 3-slot continuous practical session. Clearing or reallocating this slot will update all 3 consecutive periods simultaneously.
+                    </p>
+                  </div>
+                ) : null;
+              })()}
+
               <div>
                 <label className="block text-[11px] font-bold text-slate-700 mb-1">
                   Select Course Subject (Only {department.code} — {section.sectionName} Subjects)
@@ -1230,18 +1350,61 @@ export const ClassDetailsModule: React.FC<ClassDetailsModuleProps> = ({
                 ) : (
                   <select
                     value={selectedSubjectIdForSlot}
-                    onChange={e => setSelectedSubjectIdForSlot(e.target.value)}
+                    onChange={e => {
+                      const newSubId = e.target.value;
+                      setSelectedSubjectIdForSlot(newSubId);
+                      const foundSub = classSubjects.find(s => s.id === newSubId);
+                      if (foundSub?.type === 'lab') {
+                        setIsLabSessionMode(true);
+                      }
+                    }}
                     className="w-full px-3 py-2 text-xs rounded border border-[#CBD5E1] bg-white focus:ring-1 focus:ring-indigo-500 font-medium"
                   >
                     <option value="">-- No Subject Assigned (Clear Slot) --</option>
                     {classSubjects.map(sub => (
                       <option key={sub.id} value={sub.id}>
-                        {sub.code} — {sub.name} ({sub.facultyName || 'No Faculty'})
+                        {sub.code} — {sub.name} ({sub.facultyName || 'No Faculty'}) [{sub.type === 'lab' ? 'Lab' : 'Theory'}]
                       </option>
                     ))}
                   </select>
                 )}
               </div>
+
+              {selectedSubjectIdForSlot && (
+                <div className="space-y-1.5 p-3 rounded-lg border border-slate-200 bg-slate-50/70">
+                  <label className="block text-[11px] font-bold text-slate-700">Class Session Type</label>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <label className={`p-2 rounded border cursor-pointer flex items-center gap-2 ${!isLabSessionMode ? 'bg-indigo-50 border-indigo-300 text-indigo-900 font-bold' : 'bg-white border-slate-200 text-slate-600'}`}>
+                      <input
+                        type="radio"
+                        name="sessionType"
+                        checked={!isLabSessionMode}
+                        onChange={() => setIsLabSessionMode(false)}
+                        className="text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <span>Theory (1 Slot)</span>
+                    </label>
+                    <label className={`p-2 rounded border cursor-pointer flex items-center gap-2 ${isLabSessionMode ? 'bg-amber-50 border-amber-300 text-amber-900 font-bold' : 'bg-white border-slate-200 text-slate-600'}`}>
+                      <input
+                        type="radio"
+                        name="sessionType"
+                        checked={isLabSessionMode}
+                        onChange={() => setIsLabSessionMode(true)}
+                        className="text-amber-600 focus:ring-amber-500"
+                      />
+                      <span>Lab (3 Slots)</span>
+                    </label>
+                  </div>
+                  {isLabSessionMode && (
+                    <div className="text-[10px] text-amber-900 bg-amber-100/70 p-2 rounded border border-amber-200 mt-1 leading-relaxed space-y-0.5">
+                      <p className="font-bold">🔬 3-Slot Consecutive Lab Practical</p>
+                      <p>
+                        Automatically reserves this slot and the next 2 consecutive periods. Valid starting slots: Period 1 (9:00 AM), Period 2 (10:00 AM), or Period 5 (2:00 PM).
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {selectedSubjectIdForSlot && (
                 <div>
@@ -1252,11 +1415,11 @@ export const ClassDetailsModule: React.FC<ClassDetailsModuleProps> = ({
                     type="text"
                     value={slotRoomOverride}
                     onChange={e => setSlotRoomOverride(e.target.value)}
-                    placeholder={section.roomNumber || 'e.g. EE-204'}
+                    placeholder={section.roomNumber || (isLabSessionMode ? 'e.g. Lab 204' : 'e.g. Room 101')}
                     className="w-full px-3 py-1.5 text-xs rounded border border-[#CBD5E1] focus:ring-1 focus:ring-indigo-500"
                   />
                   <p className="text-[10px] text-slate-400 mt-1">
-                    Defaults to class room {section.roomNumber || 'Room 101'} if blank.
+                    Defaults to {section.roomNumber || (isLabSessionMode ? 'Lab 101' : 'Room 101')} if blank.
                   </p>
                 </div>
               )}

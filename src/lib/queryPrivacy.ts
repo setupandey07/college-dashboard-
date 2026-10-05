@@ -15,11 +15,11 @@ import { AcademicQuery, UserProfile, UserRole } from '../types';
  * 7. Administrator -> Full institutional oversight for system governance and SLA compliance.
  */
 export function canUserAccessQuery(
-  q: AcademicQuery,
+  q: AcademicQuery | null | undefined,
   user: UserProfile | null,
   role: UserRole | null
 ): boolean {
-  if (!user || !role) return false;
+  if (!q || !user || !role) return false;
 
   // 1. Admin superuser institutional governance & audit
   if (role === 'admin') {
@@ -48,6 +48,10 @@ export function canUserAccessQuery(
   // CRITICAL PRIVACY RULE: If user is a student and NOT the sender, they can NEVER see it!
   // "Student C cannot see it. Other students cannot see it."
   if (role === 'student') {
+    // If Admin is previewing Student role and hasn't created a query yet, allow preview of demo tickets
+    if (user.role === 'admin' && q.id.startsWith('q-demo')) {
+      return true;
+    }
     return false;
   }
 
@@ -61,22 +65,6 @@ export function canUserAccessQuery(
     return true;
   }
 
-  // If the query was explicitly addressed to another individual recipient, NO OTHER FACULTY can see it!
-  // "Student A sends query to Faculty B -> Faculty C cannot see it. Other faculty cannot see it."
-  if (targetRecipientId && targetRecipientId !== userId) {
-    // Only HOD has departmental oversight over queries in their own department
-    if (role === 'hod') {
-      const qTargetDept = (q.departmentId || q.recipientDepartment || q.department || '').trim().toUpperCase();
-      const isMatchingDept = Boolean(
-        userDeptCode &&
-        qTargetDept &&
-        (qTargetDept === userDeptCode || (userDeptName && qTargetDept.toLowerCase() === userDeptName))
-      );
-      return isMatchingDept;
-    }
-    return false;
-  }
-
   // Resolve target query department
   const qTargetDept = (q.departmentId || q.recipientDepartment || q.department || '').trim().toUpperCase();
   const isMatchingDept = Boolean(
@@ -85,9 +73,25 @@ export function canUserAccessQuery(
     (qTargetDept === userDeptCode || (userDeptName && qTargetDept.toLowerCase() === userDeptName))
   );
 
+  // If the query was explicitly addressed to another individual recipient, NO OTHER FACULTY can see it!
+  // "Student A sends query to Faculty B -> Faculty C cannot see it. Other faculty cannot see it."
+  if (targetRecipientId && targetRecipientId !== userId) {
+    // Only HOD has departmental oversight over queries in their own department
+    if (role === 'hod') {
+      if (user.role === 'admin' && (!userDeptCode || userDeptCode === 'UNASSIGNED')) {
+        return true;
+      }
+      return isMatchingDept;
+    }
+    return false;
+  }
+
   // 4. HOD Recipient check
   // EEE HOD sees HOD/escalation queries of EEE; CSE HOD cannot see EEE queries.
   if (role === 'hod') {
+    if (user.role === 'admin' && (!userDeptCode || userDeptCode === 'UNASSIGNED')) {
+      return true;
+    }
     return isMatchingDept;
   }
 
@@ -98,13 +102,24 @@ export function canUserAccessQuery(
     if (q.assignedTo && user.name && q.assignedTo.toLowerCase().includes(user.name.toLowerCase())) {
       return true;
     }
-    // If not specifically targeted to this faculty, faculty cannot see it
+    // Course Faculty check: if query relates to a subject this faculty is assigned to
+    if (q.subjectId && (user.assignedSubjectIds?.includes(q.subjectId) || user.assignedSubjectId === q.subjectId)) {
+      return true;
+    }
+    // General department faculty inquiries (not addressed to a specific faculty member)
+    if (!targetRecipientId && (isMatchingDept || (user.role === 'admin' && !userDeptCode)) && (q.recipientRole === 'faculty' || q.recipientType === 'faculty')) {
+      return true;
+    }
+    if (user.role === 'admin' && (!targetRecipientId || targetRecipientId === userId)) {
+      return true;
+    }
     return false;
   }
 
   // 6. Lab Assistant Recipient check
   if (role === 'lab_assistant') {
     if (isDirectRecipient) return true;
+    if (user.role === 'admin') return true;
     if (q.recipientRole === 'lab_assistant' || q.recipientType === 'lab_assistant' || q.category === 'lab') {
       return isMatchingDept || !qTargetDept;
     }
@@ -125,7 +140,7 @@ export function filterQueriesForUser(
   if (!queries || queries.length === 0 || !user || !role) {
     return [];
   }
-  return queries.filter(q => canUserAccessQuery(q, user, role));
+  return queries.filter(q => Boolean(q && canUserAccessQuery(q, user, role)));
 }
 
 /**
@@ -135,11 +150,14 @@ export function filterQueriesForUser(
 export function assertQueryAccessAuthorized(
   user: UserProfile | null,
   role: UserRole | null,
-  q: AcademicQuery,
+  q: AcademicQuery | null | undefined,
   action = 'Access Query'
 ): void {
   if (!user || !role) {
     throw new Error(`Security Violation: Unauthenticated request to ${action}`);
+  }
+  if (!q) {
+    throw new Error(`Security Violation: Cannot perform ${action} on undefined query.`);
   }
   if (!canUserAccessQuery(q, user, role)) {
     throw new Error(

@@ -9,11 +9,6 @@ import {
   serverTimestamp
 } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
-import {
-  INITIAL_DEPARTMENTS,
-  INITIAL_SUBJECTS
-} from '../../data/mockData';
-
 import { isAuthorizedDevAdminIdentity } from '../../lib/authHelpers';
 
 export const DEMO_USER_DOC_IDS = [
@@ -436,28 +431,27 @@ export async function purgeAllDemoData(): Promise<{ success: boolean; purgedTota
       }
     } catch (_) {}
 
-    // 11. Clean subjects of demo faculty references
+    // 11. Purge legacy predefined/hardcoded mock subjects completely
     try {
       const subsSnap = await getDocs(collection(db, 'subjects'));
+      const legacyPrefixes = ['sub-eee-', 'sub-ec-', 'sub-cs-', 'sub-it-', 'sub-me-', 'sub-ce-', 'sub-ad-'];
       for (const d of subsSnap.docs) {
         const subData = d.data();
-        if (
-          subData.facultyId === 'u-fac-1' ||
-          subData.facultyId === 'u-fac-2' ||
-          (subData.facultyName && (subData.facultyName.includes('Vikramaditya') || subData.facultyName.includes('Ananya')))
-        ) {
-          await updateDoc(d.ref, {
-            facultyId: '',
-            facultyName: 'Unassigned',
-            hoursConducted: 0,
-            status: 'pending'
-          });
+        const isLegacyPrefix = legacyPrefixes.some(pref => d.id.startsWith(pref));
+        const isUnassignedMock =
+          subData.facultyName === 'Unassigned' &&
+          (!subData.units || subData.units.length === 0) &&
+          !subData.classId &&
+          (subData.totalHoursPlanned === 45 || subData.totalHoursPlanned === 30 || subData.totalHoursPlanned === 60);
+
+        if (isLegacyPrefix || isUnassignedMock) {
+          await deleteDoc(d.ref);
           totalPurged++;
         }
       }
     } catch (_) {}
 
-    console.log(`[Firestore Purge] Successfully removed ${totalPurged} demo records.`);
+    console.log(`[Firestore Purge] Successfully removed ${totalPurged} demo/mock records.`);
     return { success: true, purgedTotal: totalPurged };
   } catch (err) {
     console.warn('[Firestore Purge] Notice during full demo purge:', err);
@@ -466,8 +460,8 @@ export async function purgeAllDemoData(): Promise<{ success: boolean; purgedTota
 }
 
 /**
- * Idempotently seeds initial departments and subjects if empty.
- * Never seeds fake users, fake marks, fake queries, or fake circulars.
+ * Ensures system is initialized cleanly without ever recreating deleted departments or hardcoded subjects.
+ * Never seeds hardcoded departments, subjects, or fake records.
  */
 export async function seedFirestoreDatabase(force = false): Promise<{ success: boolean; message: string }> {
   try {
@@ -476,28 +470,6 @@ export async function seedFirestoreDatabase(force = false): Promise<{ success: b
     try {
       const seedMetaSnap = await getDoc(seedMetaRef);
       if (seedMetaSnap.exists() && !force) {
-        // Non-blocking sync for any newly added foundational departments or subjects
-        Promise.all([
-          ...INITIAL_DEPARTMENTS.map(async (dept) => {
-            try {
-              const ref = doc(db, 'departments', dept.id);
-              const snap = await getDoc(ref);
-              if (!snap.exists()) {
-                await setDoc(ref, { ...dept, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
-              }
-            } catch (_) {}
-          }),
-          ...INITIAL_SUBJECTS.map(async (sub) => {
-            try {
-              const ref = doc(db, 'subjects', sub.id);
-              const snap = await getDoc(ref);
-              if (!snap.exists()) {
-                await setDoc(ref, { ...sub, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
-              }
-            } catch (_) {}
-          })
-        ]).catch(() => {});
-
         return { success: true, message: 'Database already verified and seeded' };
       }
     } catch (checkError) {
@@ -508,45 +480,20 @@ export async function seedFirestoreDatabase(force = false): Promise<{ success: b
       throw checkError;
     }
 
-    // Only if unseeded or forced, purge legacy demo items and seed foundational data
-    console.log('[Firestore Seed] Initializing foundational academic catalog...');
+    // Only if unseeded or forced, purge legacy demo items
+    console.log('[Firestore Seed] Verifying clean database state...');
     await purgeAllDemoData();
-
-    // 1. Seed Departments in parallel
-    await Promise.all(
-      INITIAL_DEPARTMENTS.map(async (dept) => {
-        try {
-          const ref = doc(db, 'departments', dept.id);
-          const snap = await getDoc(ref);
-          if (!snap.exists()) {
-            await setDoc(ref, { ...dept, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
-          }
-        } catch (_) {}
-      })
-    );
-
-    // 2. Seed Subjects in parallel
-    await Promise.all(
-      INITIAL_SUBJECTS.map(async (sub) => {
-        try {
-          const ref = doc(db, 'subjects', sub.id);
-          const snap = await getDoc(ref);
-          if (!snap.exists()) {
-            await setDoc(ref, { ...sub, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
-          }
-        } catch (_) {}
-      })
-    );
 
     // Mark system seed complete
     await setDoc(seedMetaRef, {
       seeded: true,
       seededAt: serverTimestamp(),
-      version: 2,
-      cleanRealTime: true
+      version: 3,
+      cleanRealTime: true,
+      zeroHardcodedData: true
     });
 
-    console.log('Firestore foundation initialized clean with zero fake data.');
+    console.log('Firestore foundation initialized clean with zero hardcoded academic data.');
     return { success: true, message: 'Firestore initialized with 100% clean database' };
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);

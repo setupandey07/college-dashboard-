@@ -67,15 +67,16 @@ export function subscribeQueries(
   const userId = user.id;
   const userDeptCode = (user.departmentCode || '').trim().toUpperCase();
 
-  // 1. Admin Oversight: Full Institutional Visibility
-  if (role === 'admin') {
+  // 1. Admin Oversight: Full Institutional Visibility (or Admin simulating any role view)
+  if (user.role === 'admin' || role === 'admin') {
     const colRef = collection(db, COLLECTION);
     return onSnapshot(
       colRef,
       (snapshot) => {
         const list = snapshot.docs.map(parseQueryDoc);
         list.sort((a, b) => compareDatesDesc(a.createdAt, b.createdAt));
-        onData(list);
+        const filtered = filterQueriesForUser(list, user, role);
+        onData(filtered);
       },
       (error) => {
         try {

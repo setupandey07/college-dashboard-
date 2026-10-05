@@ -260,7 +260,7 @@ export const MasterNotesModule: React.FC = () => {
     setFormTitle(note.title);
     setFormDescription(note.description);
     setFormDeptCode(note.departmentCode);
-    setFormBatch(note.batch);
+    setFormBatch(note.batch || '');
     setFormYear(note.year);
     setFormSemester(note.semester);
     setFormSubjectId(note.subjectId);
@@ -268,7 +268,7 @@ export const MasterNotesModule: React.FC = () => {
     setFormMaterialType(note.materialType);
     setFormFileUrl(note.fileUrl);
     setFormFileName(note.fileName || '');
-    setFormVisibility(note.visibility);
+    setFormVisibility(note.visibility || 'college_wide');
     setIsUploadModalOpen(true);
   };
 

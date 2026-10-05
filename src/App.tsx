@@ -31,13 +31,14 @@ import { AnnouncementsModule } from './components/modules/AnnouncementsModule';
 import { LabOperationsModule } from './components/modules/LabOperationsModule';
 import { MasterNotesModule } from './components/modules/MasterNotesModule';
 import { ProfileModule } from './components/modules/ProfileModule';
-import { GeminiAssistantModal } from './components/modules/GeminiAssistantModal';
+import { FloatingStudyCompanion } from './components/companion/FloatingStudyCompanion';
+import { ClassroomsModule } from './components/modules/ClassroomsModule';
+import { MentorInsightModule } from './components/modules/MentorInsightModule';
 
 const AppContent: React.FC = () => {
   const { authState, currentRole, actualRole, currentUser } = useAuth();
   const [currentTab, setCurrentTab] = useState<NavTab>('dashboard');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [isAiModalOpen, setIsAiModalOpen] = useState(false);
   const [syllabusSubjectId, setSyllabusSubjectId] = useState<string | undefined>(undefined);
 
   // 1. Direct URL Protection & Synchronization
@@ -80,11 +81,11 @@ const AppContent: React.FC = () => {
   // Tab permissions validation when role changes (e.g. Admin visiting Student view)
   useEffect(() => {
     const roleAllowedTabs: Record<UserRole, NavTab[]> = {
-      admin: ['dashboard', 'marks', 'notes', 'syllabus', 'workload', 'departments', 'users', 'queries', 'innovation', 'reports', 'announcements', 'lab_ops', 'profile'],
-      hod: ['dashboard', 'attendance', 'marks', 'notes', 'syllabus', 'workload', 'departments', 'users', 'queries', 'innovation', 'reports', 'announcements', 'lab_ops', 'profile'],
-      faculty: ['dashboard', 'attendance', 'marks', 'notes', 'syllabus', 'workload', 'queries', 'innovation', 'reports', 'announcements', 'lab_ops', 'profile'],
-      lab_assistant: ['dashboard', 'attendance', 'marks', 'notes', 'syllabus', 'lab_ops', 'queries', 'innovation', 'announcements', 'profile'],
-      student: ['dashboard', 'attendance', 'marks', 'notes', 'syllabus', 'queries', 'innovation', 'announcements', 'profile']
+      admin: ['dashboard', 'classrooms', 'marks', 'notes', 'syllabus', 'workload', 'departments', 'users', 'queries', 'innovation', 'mentor_insight', 'reports', 'announcements', 'lab_ops', 'profile'],
+      hod: ['dashboard', 'classrooms', 'attendance', 'marks', 'notes', 'syllabus', 'workload', 'departments', 'users', 'queries', 'innovation', 'mentor_insight', 'reports', 'announcements', 'lab_ops', 'profile'],
+      faculty: ['dashboard', 'classrooms', 'attendance', 'marks', 'notes', 'syllabus', 'workload', 'queries', 'innovation', 'mentor_insight', 'reports', 'announcements', 'lab_ops', 'profile'],
+      lab_assistant: ['dashboard', 'classrooms', 'attendance', 'marks', 'notes', 'syllabus', 'lab_ops', 'queries', 'innovation', 'mentor_insight', 'announcements', 'profile'],
+      student: ['dashboard', 'classrooms', 'attendance', 'marks', 'notes', 'syllabus', 'queries', 'innovation', 'mentor_insight', 'announcements', 'profile']
     };
 
     const allowed = roleAllowedTabs[currentRole] || [];
@@ -141,7 +142,7 @@ const AppContent: React.FC = () => {
         return (
           <FacultyDashboard
             onNavigate={setCurrentTab}
-            onOpenAiAssistant={() => setIsAiModalOpen(true)}
+            onOpenAiAssistant={() => window.dispatchEvent(new Event('open-study-companion'))}
           />
         );
       case 'lab_assistant':
@@ -150,7 +151,7 @@ const AppContent: React.FC = () => {
         return (
           <StudentDashboard
             onNavigate={setCurrentTab}
-            onOpenAiAssistant={() => setIsAiModalOpen(true)}
+            onOpenAiAssistant={() => window.dispatchEvent(new Event('open-study-companion'))}
           />
         );
       default:
@@ -163,6 +164,15 @@ const AppContent: React.FC = () => {
     switch (currentTab) {
       case 'dashboard':
         return renderDashboard();
+      case 'classrooms':
+        return (
+          <ClassroomsModule
+            onNavigateToSyllabus={(subId) => {
+              setSyllabusSubjectId(subId);
+              setCurrentTab('syllabus');
+            }}
+          />
+        );
       case 'attendance':
         return <AttendanceModule />;
       case 'marks':
@@ -199,6 +209,8 @@ const AppContent: React.FC = () => {
         return <AnnouncementsModule />;
       case 'lab_ops':
         return <LabOperationsModule />;
+      case 'mentor_insight':
+        return <MentorInsightModule />;
       case 'profile':
         return <ProfileModule />;
       default:
@@ -224,7 +236,7 @@ const AppContent: React.FC = () => {
         {/* Institutional Header */}
         <Header
           currentTab={currentTab}
-          onOpenAiAssistant={() => setIsAiModalOpen(true)}
+          onOpenAiAssistant={() => window.dispatchEvent(new Event('open-study-companion'))}
           onNavigateToProfile={() => setCurrentTab('profile')}
           onOpenMobileMenu={() => setIsMobileMenuOpen(true)}
         />
@@ -236,11 +248,8 @@ const AppContent: React.FC = () => {
         </main>
       </div>
 
-      {/* Gemini AI Academic Copilot Modal */}
-      <GeminiAssistantModal
-        isOpen={isAiModalOpen}
-        onClose={() => setIsAiModalOpen(false)}
-      />
+      {/* Floating AI Study Companion (Bottom-Right) */}
+      <FloatingStudyCompanion />
     </div>
   );
 };

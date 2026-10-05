@@ -393,7 +393,10 @@ export interface MasterNote {
   description: string;
   department: string; // e.g. "Electrical & Electronics Engineering"
   departmentCode: string; // e.g. "EEE"
-  batch: string; // e.g. "2026 Batch"
+  departmentId?: string;
+  classroomId?: string;
+  unitId?: string; // Stable SyllabusUnit ID
+  batch?: string; // e.g. "2026 Batch"
   batchId?: string;
   academicYear: string; // e.g. "2025-2026"
   year: number; // 1, 2, 3, 4
@@ -407,11 +410,13 @@ export interface MasterNote {
   fileUrl: string; // Reference URL, PDF preview, or cloud storage URL
   fileName?: string;
   fileSize?: string;
+  fileType?: string;
+  storagePath?: string;
   uploadedBy: string; // UID of authenticated user
   uploadedByName: string; // Authenticated author name
   uploadedByEmail?: string;
   uploadedByRole: UserRole;
   uploadedAt: string; // ISO date timestamp
   updatedAt?: any;
-  visibility: 'college_wide' | 'department_only';
+  visibility?: 'college_wide' | 'department_only';
 }

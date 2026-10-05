@@ -14,7 +14,9 @@ import {
   FlaskConical,
   User,
   GraduationCap,
-  BookMarked
+  BookMarked,
+  Compass,
+  Sparkles
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useAcademicData } from '../../context/AcademicDataContext';
@@ -23,6 +25,7 @@ import { SidebarCampusLineArt } from '../common/AcademicIllustrations';
 
 export type NavTab =
   | 'dashboard'
+  | 'classrooms'
   | 'attendance'
   | 'marks'
   | 'notes'
@@ -32,6 +35,7 @@ export type NavTab =
   | 'users'
   | 'queries'
   | 'innovation'
+  | 'mentor_insight'
   | 'reports'
   | 'announcements'
   | 'lab_ops'
@@ -82,6 +86,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       id: 'dashboard',
       label: 'Dashboard',
       icon: LayoutDashboard,
+      roles: ['admin', 'hod', 'faculty', 'lab_assistant', 'student']
+    },
+    {
+      id: 'classrooms',
+      label: currentRole === 'student' ? 'My Classroom' : 'Classrooms',
+      icon: GraduationCap,
       roles: ['admin', 'hod', 'faculty', 'lab_assistant', 'student']
     },
     {
@@ -149,6 +159,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: Lightbulb,
       roles: ['admin', 'hod', 'faculty', 'lab_assistant', 'student'],
       section: 'GOVERNANCE & SUPPORT'
+    },
+    {
+      id: 'mentor_insight',
+      label: 'Mentor Insight',
+      icon: Compass,
+      roles: ['admin', 'hod', 'faculty', 'lab_assistant', 'student'],
+      section: 'GOVERNANCE & SUPPORT',
+      badge: 'New',
+      badgeVariant: 'green'
     },
     {
       id: 'reports',

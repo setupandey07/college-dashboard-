@@ -229,14 +229,21 @@ export const QueriesModule: React.FC = () => {
     }
   };
 
-  const isQueryCreator = selectedQuery && (
-    selectedQuery.createdBy === currentUser.id ||
-    selectedQuery.studentId === currentUser.id ||
-    (selectedQuery.senderEmail && selectedQuery.senderEmail.toLowerCase() === currentUser.email?.toLowerCase())
+  const isQueryCreator = Boolean(
+    selectedQuery && (
+      selectedQuery.createdByUserId === currentUser.id ||
+      selectedQuery.createdBy === currentUser.id ||
+      selectedQuery.studentId === currentUser.id ||
+      (selectedQuery.senderEmail && selectedQuery.senderEmail.toLowerCase() === currentUser.email?.toLowerCase())
+    )
   );
 
-  const canManageSelectedTicket = currentRole === 'admin' || isQueryCreator || canUserAccessQuery(selectedQuery, currentUser, currentRole);
-  const canDeleteSelectedTicket = currentRole === 'admin' || isQueryCreator;
+  const canManageSelectedTicket = Boolean(
+    currentRole === 'admin' ||
+    isQueryCreator ||
+    (selectedQuery ? canUserAccessQuery(selectedQuery, currentUser, currentRole) : false)
+  );
+  const canDeleteSelectedTicket = Boolean(currentRole === 'admin' || isQueryCreator);
 
   return (
     <div className="space-y-6">

@@ -51,53 +51,52 @@ export const HodDashboard: React.FC<HodDashboardProps> = ({ onNavigate }) => {
 
   const [selectedTerm, setSelectedTerm] = useState('AY 2026–27 (Odd)');
 
-  // Find department matching currentUser's department or default to first department
+  const userDeptCode = (currentUser?.departmentCode || '').toUpperCase().trim();
+  const userDeptName = (currentUser?.department || '').toLowerCase().trim();
+
+  // Find department strictly matching currentUser's department (NO CSE fallback)
   const myDept = departments.find(
-    d => d.code === currentUser.departmentCode ||
-         (currentUser.department && d.name.toLowerCase().includes(currentUser.department.toLowerCase())) ||
-         d.code === 'CSE'
-  ) || departments[0] || null;
+    d => (userDeptCode && d.code.toUpperCase().trim() === userDeptCode) ||
+         (userDeptName && d.name.toLowerCase().trim() === userDeptName)
+  ) || null;
 
-  const deptCode = myDept?.code || currentUser.departmentCode || 'CSE';
-  const deptName = myDept?.name || currentUser.department || 'Academic Department';
+  const deptCode = myDept?.code || userDeptCode || 'DEPT';
+  const deptName = myDept?.name || currentUser.department || `${deptCode} Department`;
 
-  const deptSections = myDept
-    ? sections.filter(
-        s =>
-          s.status !== 'inactive' &&
-          (s.departmentCode?.toUpperCase() === myDept.code.toUpperCase() || s.departmentId === myDept.id)
-      )
-    : sections.filter(s => s.status !== 'inactive');
+  const deptSections = sections.filter(
+    s =>
+      s.status !== 'inactive' &&
+      ((deptCode && s.departmentCode?.toUpperCase() === deptCode) || (myDept && s.departmentId === myDept.id))
+  );
   const classCount = deptSections.length;
 
-  const deptSubjects = myDept
-    ? subjects.filter(s => s.department === myDept.name || s.department === myDept.code)
-    : subjects;
+  const deptSubjects = subjects.filter(s => {
+    const sDeptCode = (s.departmentCode || '').toUpperCase().trim();
+    const sDeptName = (s.department || '').toLowerCase().trim();
+    return (deptCode && sDeptCode === deptCode) || (deptName && sDeptName === deptName.toLowerCase());
+  });
 
-  const deptWorkloads = myDept
-    ? workloads.filter(w => w.department === myDept.name || w.department === myDept.code)
-    : workloads;
+  const deptWorkloads = workloads.filter(w => {
+    const wDept = (w.department || '').toLowerCase().trim();
+    return (deptCode && wDept === deptCode.toLowerCase()) || (deptName && wDept === deptName.toLowerCase());
+  });
 
   const myVisibleQueries = filterQueriesForUser(queries, currentUser, 'hod');
   const deptQueries = myVisibleQueries.filter(q => q.status !== 'resolved');
 
-  // Dynamic faculty count for this department from users
+  // Dynamic faculty count strictly for this department from users
   const deptFacultyUsers = users.filter(
     u => (u.role === 'faculty' || u.role === 'hod') &&
-         (!myDept || u.departmentCode === myDept.code || (myDept.name && u.department?.toLowerCase().includes(myDept.name.toLowerCase())))
+         ((deptCode && u.departmentCode?.toUpperCase() === deptCode) || (deptName && u.department?.toLowerCase() === deptName.toLowerCase()))
   );
   const facultyCount = deptFacultyUsers.length;
 
-  // Dynamic student count for this department from students and users
+  // Dynamic student count strictly for this department from students and users
   const sIds = new Set<string>();
-  if (myDept) {
-    users.filter(u => u.role === 'student' && (u.departmentCode === myDept.code || u.department?.toLowerCase().includes(myDept.name.toLowerCase())))
-      .forEach(u => sIds.add(u.id));
-    students.filter(s => s.departmentName?.toLowerCase().includes(myDept.name.toLowerCase()) || s.departmentId?.includes(myDept.code))
-      .forEach(s => sIds.add(s.userId || s.id));
-  } else {
-    students.forEach(s => sIds.add(s.userId || s.id));
-  }
+  users.filter(u => u.role === 'student' && ((deptCode && u.departmentCode?.toUpperCase() === deptCode) || (deptName && u.department?.toLowerCase() === deptName.toLowerCase())))
+    .forEach(u => sIds.add(u.id));
+  students.filter(s => (deptName && s.departmentName?.toLowerCase().includes(deptName.toLowerCase())) || (deptCode && (s.departmentId?.includes(deptCode) || s.departmentName?.includes(deptCode))))
+    .forEach(s => sIds.add(s.userId || s.id));
   const studentCount = sIds.size;
 
   // Overloaded faculty count

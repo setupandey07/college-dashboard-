@@ -19,6 +19,7 @@ import { useAcademicData } from '../../context/AcademicDataContext';
 import { useAuth } from '../../context/AuthContext';
 import { AssessmentType, StudentMarksEntry, Subject } from '../../types';
 import { getAssessmentFieldKey, VALID_ASSESSMENT_TYPES } from '../../services/firestore/marks';
+import { sortStudentsByRollNumber } from '../../lib/academicSort';
 
 export const MarksModule: React.FC = () => {
   const { currentRole, currentUser, actualRole, isSimulatingRole } = useAuth();
@@ -175,7 +176,7 @@ export const MarksModule: React.FC = () => {
       }
     });
 
-    return list;
+    return sortStudentsByRollNumber(list);
   }, [students, users]);
 
   // Selected student for Marksheet view (for Admin / HOD / Faculty)
@@ -265,7 +266,8 @@ export const MarksModule: React.FC = () => {
       })
     ];
 
-    setMarksEntries(combined);
+    // Strict numerical sorting by roll number / USN
+    setMarksEntries(sortStudentsByRollNumber(combined));
   }, [currentSubject, selectedSection, assessmentType, maxMarks, students, users, studentMarks]);
 
   // Update in-memory entry for a student

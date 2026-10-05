@@ -153,7 +153,42 @@ export async function deleteDepartment(deptId: string): Promise<void> {
   const path = `${COLLECTION}/${deptId}`;
   try {
     const docRef = doc(db, COLLECTION, deptId);
+    const snap = await getDoc(docRef);
+    const data = snap.exists() ? snap.data() : null;
+    const deptCode = (data?.code || '').toUpperCase().trim();
+    const deptName = (data?.name || '').toLowerCase().trim();
+
+    // 1. Delete the department document
     await deleteDoc(docRef);
+
+    // 2. Cascade delete associated sections (classrooms) and timetables
+    try {
+      const secSnap = await getDocs(collection(db, 'sections'));
+      for (const d of secSnap.docs) {
+        const sec = d.data();
+        const secDeptId = (sec.departmentId || '').trim();
+        const secDeptCode = (sec.departmentCode || '').toUpperCase().trim();
+        if (secDeptId === deptId || (deptCode && secDeptCode === deptCode)) {
+          await deleteDoc(d.ref);
+          try {
+            await deleteDoc(doc(db, 'timetables', d.id));
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+
+    // 3. Cascade delete associated subjects
+    try {
+      const subSnap = await getDocs(collection(db, 'subjects'));
+      for (const d of subSnap.docs) {
+        const sub = d.data();
+        const subDeptCode = (sub.departmentCode || '').toUpperCase().trim();
+        const subDeptName = (sub.department || '').toLowerCase().trim();
+        if ((deptCode && subDeptCode === deptCode) || (deptName && subDeptName === deptName)) {
+          await deleteDoc(d.ref);
+        }
+      }
+    } catch (_) {}
 
     await logAuditEvent({
       actorName: 'Admin',
@@ -161,7 +196,7 @@ export async function deleteDepartment(deptId: string): Promise<void> {
       action: 'deleteDepartment',
       entityType: 'department',
       entityId: deptId,
-      metadata: { deletedAt: new Date().toISOString() }
+      metadata: { deletedAt: new Date().toISOString(), deptCode, cascaded: true }
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);

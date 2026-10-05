@@ -29,6 +29,7 @@ import {
   DEFAULT_TIMETABLE_SLOTS,
   subscribeAllTimetables,
   updateTimetableSlot as firestoreUpdateTimetableSlot,
+  assignLabTimetableSlots as firestoreAssignLabTimetableSlots,
   subscribeNotifications,
   createNotification as firestoreCreateNotification,
   markNotificationAsRead as firestoreMarkNotificationAsRead,
@@ -163,6 +164,15 @@ export interface AcademicDataContextType {
     slotId: string,
     cell: TimetableCell | null
   ) => Promise<void>;
+  assignLabTimetableSlots: (
+    sectionId: string,
+    departmentCode: string,
+    academicYear: string,
+    sectionName: string,
+    day: TimetableDay,
+    startSlotId: string,
+    cell: TimetableCell
+  ) => Promise<{ success: boolean; affectedSlotIds: string[] }>;
   submitQuery: (query: Omit<AcademicQuery, 'id' | 'ticketId' | 'createdAt' | 'status' | 'replies'>) => Promise<void>;
   replyToQuery: (queryId: string, authorName: string, authorRole: UserRole, message: string) => Promise<void>;
   updateQueryStatus: (queryId: string, status: 'open' | 'in_progress' | 'resolved', actorName?: string) => Promise<void>;
@@ -1188,6 +1198,42 @@ export const AcademicDataProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
   };
 
+  const assignLabTimetableSlots = async (
+    sectionId: string,
+    departmentCode: string,
+    academicYear: string,
+    sectionName: string,
+    day: TimetableDay,
+    startSlotId: string,
+    cell: TimetableCell
+  ) => {
+    const result = await firestoreAssignLabTimetableSlots(
+      sectionId,
+      departmentCode,
+      academicYear,
+      sectionName,
+      day,
+      startSlotId,
+      cell
+    );
+
+    if (cell.facultyId) {
+      firestoreCreateNotification({
+        recipientUserId: cell.facultyId,
+        senderUserId: currentUser?.id || '',
+        senderName: currentUser?.name || 'Academic Administrator',
+        title: 'Lab Session Scheduled',
+        message: `Your 3-period Lab practical for ${cell.subjectName} (${cell.subjectCode}) in ${departmentCode} Year ${academicYear} Sec ${sectionName} has been scheduled on ${day} starting at slot ${startSlotId.toUpperCase()} (${cell.room || 'Lab'}).`,
+        type: 'info',
+        linkTab: 'timetable',
+        relatedEntity: 'timetable',
+        relatedEntityId: sectionId
+      }).catch(err => console.warn('Lab timetable notification error:', err));
+    }
+
+    return result;
+  };
+
   // 4. Query / Grievance operations with strict ownership and private notifications
   const submitQuery = async (queryData: Omit<AcademicQuery, 'id' | 'ticketId' | 'createdAt' | 'status' | 'replies'>) => {
     const senderId = queryData.createdByUserId || queryData.createdBy || currentUser?.id || '';
@@ -1494,7 +1540,16 @@ export const AcademicDataProvider: React.FC<{ children: React.ReactNode }> = ({ 
   };
 
   const deleteDepartment = async (deptId: string) => {
+    const targetDept = departments.find(d => d.id === deptId);
+    const deptCode = targetDept?.code?.toUpperCase().trim();
+
+    // Local optimistic updates for department, sections, and subjects
     setDepartments(prev => prev.filter(d => d.id !== deptId));
+    if (deptCode) {
+      setSections(prev => prev.filter(s => s.departmentId !== deptId && s.departmentCode?.toUpperCase() !== deptCode));
+      setSubjects(prev => prev.filter(s => (s as any).departmentId !== deptId && s.departmentCode?.toUpperCase() !== deptCode));
+    }
+
     try {
       await firestoreDeleteDepartment(deptId);
     } catch (e) {
@@ -1824,6 +1879,7 @@ export const AcademicDataProvider: React.FC<{ children: React.ReactNode }> = ({ 
         updateSubjectUnits,
         deleteSubject,
         updateTimetableSlot,
+        assignLabTimetableSlots,
         submitQuery,
         replyToQuery,
         updateQueryStatus,
