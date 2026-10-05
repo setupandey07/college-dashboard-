@@ -13,6 +13,7 @@ import { useAuth } from '../../context/AuthContext';
 export const LoginPage: React.FC = () => {
   const {
     signInWithGoogle,
+    simulateIdentityVerification,
     authState,
     authError,
     clearAuthError
@@ -159,8 +160,82 @@ export const LoginPage: React.FC = () => {
                 </button>
               </div>
 
+              {/* Development & Testing Verification Simulator */}
+              <div className="pt-2 border-t border-slate-100">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                    <Shield className="w-3 h-3 text-[#4F46E5]" />
+                    Testing & Evaluation Profiles
+                  </span>
+                  <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
+                    Test Mode
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={() => simulateIdentityVerification('525199@student.nitandhra.ac.in', 'stu-525199', 'Aarav Patel')}
+                    className="p-2 rounded-lg border border-slate-200 hover:border-indigo-400 bg-slate-50 hover:bg-white text-left transition-all group disabled:opacity-50 cursor-pointer"
+                    title="Case 1: Test New Student Profile Setup"
+                  >
+                    <span className="text-[10px] font-bold text-indigo-700 block group-hover:text-indigo-900">
+                      🎓 Student
+                    </span>
+                    <span className="text-[9px] text-slate-500 block truncate">
+                      Setup & Portal View
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={() => simulateIdentityVerification('prof.kiran.eee@nitandhra.ac.in', 'fac-kiran-eee', 'Prof. Kiran Kumar (EEE)')}
+                    className="p-2 rounded-lg border border-slate-200 hover:border-emerald-400 bg-slate-50 hover:bg-white text-left transition-all group disabled:opacity-50 cursor-pointer"
+                    title="Case 2: Test New Faculty (EEE) Onboarding & Subject Selection"
+                  >
+                    <span className="text-[10px] font-bold text-emerald-700 block group-hover:text-emerald-900">
+                      📚 New Faculty (EEE)
+                    </span>
+                    <span className="text-[9px] text-slate-500 block truncate">
+                      Onboarding & Subjects
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={() => simulateIdentityVerification('suresh.lab@nitandhra.ac.in', 'lab-suresh', 'Suresh Babu (Lab In-Charge)')}
+                    className="p-2 rounded-lg border border-slate-200 hover:border-teal-400 bg-slate-50 hover:bg-white text-left transition-all group disabled:opacity-50 cursor-pointer"
+                    title="Case 3: Test New Lab Assistant Onboarding & Subject Selection"
+                  >
+                    <span className="text-[10px] font-bold text-teal-700 block group-hover:text-teal-900">
+                      🔬 Lab Assistant
+                    </span>
+                    <span className="text-[9px] text-slate-500 block truncate">
+                      Lab Onboarding
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={() => simulateIdentityVerification('pkr02042006@gmail.com', 'u-admin-1', 'Principal & Academic Dean')}
+                    className="p-2 rounded-lg border border-slate-200 hover:border-amber-400 bg-slate-50 hover:bg-white text-left transition-all group disabled:opacity-50 cursor-pointer"
+                    title="Case 4: Test Administrator Access & Allocations"
+                  >
+                    <span className="text-[10px] font-bold text-amber-700 block group-hover:text-amber-900">
+                      🏛️ Administrator
+                    </span>
+                    <span className="text-[9px] text-slate-500 block truncate">
+                      Global Mgmt & Allocations
+                    </span>
+                  </button>
+                </div>
+              </div>
+
               {/* Institutional Single Sign-On Security Note */}
-              <div className="pt-2 text-center text-[10px] text-slate-400 flex items-center justify-center gap-1.5">
+              <div className="pt-1 text-center text-[10px] text-slate-400 flex items-center justify-center gap-1.5">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                 <span>Single Sign-On (SSO) verified via Google & Firebase Identity</span>
               </div>

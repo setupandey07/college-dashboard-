@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   MessageSquareWarning,
   Plus,
@@ -11,11 +11,14 @@ import {
   AlertTriangle,
   Building2,
   HelpCircle,
-  Trash2
+  Trash2,
+  ShieldCheck,
+  ArrowRight
 } from 'lucide-react';
 import { useAcademicData } from '../../context/AcademicDataContext';
 import { useAuth } from '../../context/AuthContext';
-import { AcademicQuery } from '../../types';
+import { AcademicQuery, UserRole } from '../../types';
+import { filterQueriesForUser, canUserAccessQuery } from '../../lib/queryPrivacy';
 
 export const QueriesModule: React.FC = () => {
   const { currentUser, currentRole } = useAuth();
@@ -24,48 +27,84 @@ export const QueriesModule: React.FC = () => {
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [search, setSearch] = useState<string>('');
-  const [selectedQueryId, setSelectedQueryId] = useState<string | null>(queries[0]?.id || null);
   const [replyText, setReplyText] = useState<string>('');
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  // New Query Form State
+  // Strict Authoritative Privacy Filter:
+  // A student sees ONLY their own queries.
+  // An HOD sees queries specifically addressed to them or their department HOD.
+  // Other students / faculty / HODs CANNOT see it.
+  const authorizedQueries = filterQueriesForUser(queries, currentUser, currentRole);
+
+  const [selectedQueryId, setSelectedQueryId] = useState<string | null>(authorizedQueries[0]?.id || null);
+
+  // Form State for raising query
   const [newTitle, setNewTitle] = useState('');
   const [newCategory, setNewCategory] = useState<AcademicQuery['category']>('academic');
   const [newPriority, setNewPriority] = useState<AcademicQuery['priority']>('medium');
   const [newDescription, setNewDescription] = useState('');
-  const [assignedToStaff, setAssignedToStaff] = useState('');
 
-  const facultyAndStaff = users.filter(u => u.role === 'faculty' || u.role === 'hod' || u.role === 'lab_assistant');
+  // Explicit Recipient Architecture
+  const [recipientTarget, setRecipientTarget] = useState<'hod' | 'faculty' | 'lab_assistant' | 'admin'>('hod');
+  const defaultDeptCode = currentUser.departmentCode && currentUser.departmentCode !== 'UNASSIGNED'
+    ? currentUser.departmentCode
+    : (departments[0]?.code || 'EEE');
+  const [recipientDeptCode, setRecipientDeptCode] = useState<string>(defaultDeptCode);
+  const [recipientFacultyId, setRecipientFacultyId] = useState<string>('');
 
-  // Synchronize selected ticket
-  React.useEffect(() => {
-    if (!selectedQueryId && queries.length > 0) {
-      setSelectedQueryId(queries[0].id);
+  // Keep selected department aligned with default if not initialized
+  useEffect(() => {
+    if (!recipientDeptCode && departments.length > 0) {
+      setRecipientDeptCode(departments[0].code);
     }
-  }, [queries, selectedQueryId]);
+  }, [departments, recipientDeptCode]);
+
+  // Available faculty for currently selected recipient department
+  const deptFaculty = users.filter(u =>
+    (u.role === 'faculty' || u.role === 'hod') &&
+    (u.departmentCode?.toUpperCase() === recipientDeptCode.toUpperCase() ||
+     (u.department && u.department.toLowerCase().includes(recipientDeptCode.toLowerCase())))
+  );
+
+  // Synchronize selected ticket smoothly when list changes or filter updates
+  useEffect(() => {
+    if (!selectedQueryId && authorizedQueries.length > 0) {
+      setSelectedQueryId(authorizedQueries[0].id);
+    } else if (selectedQueryId && !authorizedQueries.some(q => q.id === selectedQueryId)) {
+      setSelectedQueryId(authorizedQueries[0]?.id || null);
+    }
+  }, [authorizedQueries, selectedQueryId]);
 
   const showNotification = (type: 'success' | 'error', message: string) => {
     setNotification({ type, message });
     setTimeout(() => setNotification(null), 4000);
   };
 
-  const filteredQueries = queries.filter(q => {
+  const filteredQueries = authorizedQueries.filter(q => {
     const matchesCat = filterCategory === 'all' || q.category === filterCategory;
     const matchesStatus = filterStatus === 'all' || q.status === filterStatus;
     const matchesSearch =
       q.title.toLowerCase().includes(search.toLowerCase()) ||
       q.ticketId.toLowerCase().includes(search.toLowerCase()) ||
       q.studentName.toLowerCase().includes(search.toLowerCase()) ||
-      (q.department && q.department.toLowerCase().includes(search.toLowerCase()));
+      (q.department && q.department.toLowerCase().includes(search.toLowerCase())) ||
+      (q.recipientDepartment && q.recipientDepartment.toLowerCase().includes(search.toLowerCase())) ||
+      (q.recipientName && q.recipientName.toLowerCase().includes(search.toLowerCase()));
     return matchesCat && matchesStatus && matchesSearch;
   });
 
-  const selectedQuery = queries.find(q => q.id === selectedQueryId) || filteredQueries[0] || null;
+  const selectedQuery = authorizedQueries.find(q => q.id === selectedQueryId) || filteredQueries[0] || null;
 
   const handleSendReply = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!replyText.trim() || !selectedQuery) return;
+
+    // Defense: verify user can access this ticket before replying
+    if (!canUserAccessQuery(selectedQuery, currentUser, currentRole)) {
+      showNotification('error', 'Unauthorized to respond to this ticket.');
+      return;
+    }
 
     try {
       await replyToQuery(selectedQuery.id, currentUser.name, currentUser.role, replyText.trim());
@@ -79,30 +118,87 @@ export const QueriesModule: React.FC = () => {
   const handleCreateQuery = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTitle.trim() || !newDescription.trim()) {
-      showNotification('error', 'Please provide a title and detailed description.');
+      showNotification('error', 'Please provide an inquiry title and detailed description.');
       return;
     }
 
-    try {
-      const assigned = assignedToStaff.trim() ||
-        (newCategory === 'lab' ? 'Central Lab In-Charge' : facultyAndStaff[0]?.name || 'Academic Dean Office');
+    // Resolve explicit recipient metadata
+    let recipientType: AcademicQuery['recipientType'] = recipientTarget;
+    let recipientRole: UserRole = recipientTarget;
+    let targetDept = recipientDeptCode.toUpperCase().trim();
+    let recipientId: string | undefined = undefined;
+    let recipientName = '';
 
+    if (recipientTarget === 'hod') {
+      recipientRole = 'hod';
+      recipientType = 'hod';
+      recipientName = `Head of Department (${targetDept})`;
+      // Check if there is an authoritative HOD user for this department
+      const hodUser = users.find(u => u.role === 'hod' && u.departmentCode?.toUpperCase() === targetDept);
+      if (hodUser) {
+        recipientId = hodUser.id;
+        recipientName = `HOD of ${targetDept} (${hodUser.name})`;
+      }
+    } else if (recipientTarget === 'faculty') {
+      recipientRole = 'faculty';
+      if (recipientFacultyId) {
+        const facUser = deptFaculty.find(f => f.id === recipientFacultyId);
+        if (facUser) {
+          recipientType = 'specific_user';
+          recipientId = facUser.id;
+          recipientName = `Prof. ${facUser.name} (${targetDept})`;
+        } else {
+          recipientType = 'faculty';
+          recipientName = `Faculty of ${targetDept}`;
+        }
+      } else {
+        recipientType = 'faculty';
+        recipientName = `Faculty of ${targetDept}`;
+      }
+    } else if (recipientTarget === 'lab_assistant') {
+      recipientRole = 'lab_assistant';
+      recipientType = 'lab_assistant';
+      recipientName = `Laboratory In-Charge (${targetDept})`;
+    } else if (recipientTarget === 'admin') {
+      recipientRole = 'admin';
+      recipientType = 'admin';
+      targetDept = 'ADMIN';
+      recipientName = 'Office of the Dean / Academic Governance';
+    }
+
+    try {
       await submitQuery({
         title: newTitle.trim(),
         category: newCategory,
+        createdByUserId: currentUser.id,
+        createdByRole: currentUser.role,
+        createdByName: currentUser.name,
+        createdBy: currentUser.id,
         studentId: currentUser.id,
         studentName: currentUser.name,
-        usn: currentUser.regId,
-        department: currentUser.departmentCode || currentUser.department || 'General Academic',
+        senderRole: currentUser.role,
+        senderEmail: currentUser.email,
+        senderDepartment: currentUser.departmentCode || currentUser.department || 'General',
+        usn: currentUser.regId || '',
+        recipientUserId: recipientId,
+        recipientType,
+        recipientRole,
+        recipientDepartment: targetDept,
+        recipientId,
+        recipientName,
+        departmentId: targetDept,
+        department: targetDept,
         priority: newPriority,
         description: newDescription.trim(),
-        assignedTo: assigned
+        message: newDescription.trim(),
+        assignedTo: recipientName
       });
 
       setIsSubmitModalOpen(false);
       setNewTitle('');
       setNewDescription('');
-      showNotification('success', 'Grievance inquiry ticket submitted successfully!');
+      setRecipientFacultyId('');
+      showNotification('success', `Grievance inquiry ticket submitted directly to ${recipientName}!`);
     } catch (err) {
       showNotification('error', 'Failed to submit inquiry.');
     }
@@ -115,135 +211,144 @@ export const QueriesModule: React.FC = () => {
       await deleteQuery(queryId);
       setDeletingQueryId(null);
       if (selectedQueryId === queryId) {
-        const remaining = queries.filter(q => q.id !== queryId);
+        const remaining = authorizedQueries.filter(q => q.id !== queryId);
         setSelectedQueryId(remaining[0]?.id || null);
       }
-      showNotification('success', 'Inquiry ticket removed permanently.');
+      showNotification('success', 'Inquiry ticket deleted from database.');
     } catch (err) {
       showNotification('error', 'Failed to delete inquiry ticket.');
     }
   };
 
-  const handlePurgeAllDemo = async () => {
-    try {
-      const res = await purgeAllDemoData();
-      showNotification('success', `Database cleansed: ${res.purgedTotal} demo records deleted.`);
-    } catch (err) {
-      showNotification('error', 'Failed to purge demo tickets.');
-    }
-  };
-
   const handleStatusChange = async (queryId: string, status: 'open' | 'in_progress' | 'resolved') => {
     try {
-      await updateQueryStatus(queryId, status);
+      await updateQueryStatus(queryId, status, currentUser.name);
       showNotification('success', `Ticket status updated to ${status.replace('_', ' ')}.`);
     } catch (err) {
       showNotification('error', 'Failed to update ticket status.');
     }
   };
 
+  const isQueryCreator = selectedQuery && (
+    selectedQuery.createdBy === currentUser.id ||
+    selectedQuery.studentId === currentUser.id ||
+    (selectedQuery.senderEmail && selectedQuery.senderEmail.toLowerCase() === currentUser.email?.toLowerCase())
+  );
+
+  const canManageSelectedTicket = currentRole === 'admin' || isQueryCreator || canUserAccessQuery(selectedQuery, currentUser, currentRole);
+  const canDeleteSelectedTicket = currentRole === 'admin' || isQueryCreator;
+
   return (
-    <div className="space-y-5">
-      {/* Toast Notification */}
+    <div className="space-y-6">
+      {/* Notifications */}
       {notification && (
         <div
-          className={`p-3 rounded-lg text-xs font-semibold flex items-center justify-between shadow-xs transition-all ${
+          className={`p-3.5 rounded-lg border text-xs font-semibold flex items-center justify-between gap-3 animate-in fade-in ${
             notification.type === 'success'
-              ? 'bg-emerald-50 text-emerald-800 border border-emerald-300'
-              : 'bg-red-50 text-red-800 border border-red-300'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : 'bg-red-50 border-red-200 text-red-800'
           }`}
         >
           <div className="flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+            {notification.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            ) : (
+              <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+            )}
             <span>{notification.message}</span>
           </div>
-          <button onClick={() => setNotification(null)} className="text-slate-400 hover:text-slate-700 p-1">
+          <button
+            onClick={() => setNotification(null)}
+            className="text-slate-400 hover:text-slate-600 p-0.5 rounded cursor-pointer"
+          >
             <X className="w-3.5 h-3.5" />
           </button>
         </div>
       )}
 
-      {/* Title */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-4 rounded-lg border border-[#E2E8F0] shadow-xs">
-        <div className="flex items-center gap-2">
-          <div className="p-1.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200">
-            <MessageSquareWarning className="w-4 h-4 text-[#4F46E5]" />
-          </div>
+      {/* Top Banner & Action Bar */}
+      <div className="bg-white rounded-lg p-5 border border-[#E2E8F0] shadow-2xs">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
-            <h1 className="text-base font-bold text-[#0F172A]">Grievance Redressal & Academic Queries</h1>
-            <p className="text-[11px] text-slate-500">
-              Direct student-faculty escalation channel with SLA monitoring and verified resolution logs
+            <div className="flex items-center gap-2">
+              <h1 className="text-base font-bold text-[#0F172A]">Grievance Redressal & Academic Queries</h1>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 uppercase flex items-center gap-1">
+                <ShieldCheck className="w-3 h-3 text-emerald-600" />
+                Data Isolated
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-1 max-w-2xl">
+              {currentUser.role === 'student' ? (
+                <>
+                  Private inquiry portal for <strong className="text-slate-800">{currentUser.name}</strong> ({currentUser.regId}).
+                  Queries you raise are confidential and visible exclusively to you and the designated department authority.
+                </>
+              ) : currentUser.role === 'hod' ? (
+                <>
+                  Department Inquiries Inbox for <strong className="text-slate-800">{currentUser.name}</strong> (HOD {currentUser.departmentCode}).
+                  Viewing queries addressed to the HOD of {currentUser.departmentCode}.
+                </>
+              ) : (
+                <>
+                  Institutional grievance and query handling console for authorized faculty and administrators.
+                </>
+              )}
             </p>
           </div>
-        </div>
 
-        <div className="flex items-center gap-2">
-          {currentRole === 'admin' && queries.length > 0 && (
+          <div className="flex items-center gap-2.5">
             <button
-              onClick={handlePurgeAllDemo}
-              className="text-xs text-red-600 hover:text-red-700 font-semibold px-2.5 py-1.5 rounded bg-red-50 hover:bg-red-100 border border-red-200 transition-colors cursor-pointer"
+              onClick={() => setIsSubmitModalOpen(true)}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-md bg-[#0F172A] hover:bg-slate-800 text-white font-semibold text-xs transition-colors shadow-xs cursor-pointer active:scale-95"
             >
-              Purge Demo Tickets
+              <Plus className="w-3.5 h-3.5 text-amber-400" />
+              Raise New Inquiry
             </button>
-          )}
-          <button
-            onClick={() => setIsSubmitModalOpen(true)}
-            className="px-3.5 py-1.5 rounded-md bg-[#0F172A] hover:bg-slate-800 text-white font-semibold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer active:scale-95"
-          >
-            <Plus className="w-4 h-4 text-amber-400" />
-            Raise Inquiry
-          </button>
-        </div>
-      </div>
-
-      {/* Filter and Search Bar */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-white p-3 rounded-lg border border-[#E2E8F0] text-xs">
-        <div className="relative flex-1 max-w-md">
-          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
-          <input
-            type="text"
-            placeholder="Search tickets by ID, title, student, department..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="w-full text-xs pl-8 pr-3 py-1.5 rounded-md border border-[#E2E8F0] bg-[#F8FAFC] focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#4F46E5]"
-          />
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1">
-            <span className="text-slate-500 font-medium mr-0.5">Category:</span>
-            {['all', 'academic', 'lab', 'exam'].map(cat => (
-              <button
-                key={cat}
-                onClick={() => setFilterCategory(cat)}
-                className={`px-2 py-0.5 rounded text-xs font-medium capitalize cursor-pointer ${
-                  filterCategory === cat ? 'bg-[#0F172A] text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                }`}
-              >
-                {cat}
-              </button>
-            ))}
+        {/* Filters and Search Bar */}
+        <div className="mt-4 pt-4 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+          <div className="relative w-full sm:w-72">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              placeholder="Search by ticket ID, title, or recipient..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="w-full pl-8 pr-3 py-1.5 rounded-md border border-[#E2E8F0] bg-[#F8FAFC] text-slate-800 text-xs focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#4F46E5]"
+            />
           </div>
 
-          <div className="flex items-center gap-1 ml-2">
-            <span className="text-slate-500 font-medium mr-0.5">Status:</span>
-            {['all', 'open', 'in_progress', 'resolved'].map(st => (
-              <button
-                key={st}
-                onClick={() => setFilterStatus(st)}
-                className={`px-2 py-0.5 rounded text-xs font-medium capitalize cursor-pointer ${
-                  filterStatus === st ? 'bg-[#0F172A] text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                }`}
-              >
-                {st.replace('_', ' ')}
-              </button>
-            ))}
+          <div className="flex items-center gap-2 w-full sm:w-auto overflow-x-auto">
+            <select
+              value={filterCategory}
+              onChange={e => setFilterCategory(e.target.value)}
+              className="p-1.5 rounded-md border border-[#E2E8F0] bg-[#F8FAFC] text-xs font-medium text-slate-700 focus:bg-white"
+            >
+              <option value="all">All Categories</option>
+              <option value="academic">Academic</option>
+              <option value="exam">Internal Assessment</option>
+              <option value="lab">Lab Operations</option>
+              <option value="admin">Administration</option>
+            </select>
+
+            <select
+              value={filterStatus}
+              onChange={e => setFilterStatus(e.target.value)}
+              className="p-1.5 rounded-md border border-[#E2E8F0] bg-[#F8FAFC] text-xs font-medium text-slate-700 focus:bg-white"
+            >
+              <option value="all">All Statuses</option>
+              <option value="open">Open</option>
+              <option value="in_progress">In Progress</option>
+              <option value="resolved">Resolved</option>
+            </select>
           </div>
         </div>
       </div>
 
       {/* Empty State for 0 Total Queries */}
-      {queries.length === 0 ? (
+      {authorizedQueries.length === 0 ? (
         <div className="bg-white rounded-lg border border-[#E2E8F0] p-10 sm:p-14 text-center shadow-xs">
           <div className="w-16 h-16 mx-auto rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mb-4">
             <MessageSquareWarning className="w-8 h-8 text-slate-400" />
@@ -252,7 +357,9 @@ export const QueriesModule: React.FC = () => {
             0 Grievances or Academic Inquiries
           </h2>
           <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed mb-5">
-            No academic or laboratory grievances have been raised in the database yet. Students and faculty can initiate inquiries regarding marks evaluation, timetable clashes, or equipment readiness.
+            {currentUser.role === 'student'
+              ? 'You have not submitted any queries yet. Any inquiry you submit will be displayed here securely.'
+              : 'No open grievances or inquiries addressed to your account or department at this time.'}
           </p>
           <button
             onClick={() => setIsSubmitModalOpen(true)}
@@ -268,7 +375,7 @@ export const QueriesModule: React.FC = () => {
           {/* Tickets List */}
           <div className="lg:col-span-1 bg-white rounded-lg border border-[#E2E8F0] overflow-hidden max-h-[640px] flex flex-col shadow-2xs">
             <div className="p-3 border-b border-[#E2E8F0] bg-[#F8FAFC] flex items-center justify-between text-xs font-bold text-slate-700">
-              <span>Inquiries ({filteredQueries.length})</span>
+              <span>Your Accessible Inquiries ({filteredQueries.length})</span>
               <span className="text-[10px] text-slate-400 font-normal">Select ticket</span>
             </div>
 
@@ -308,9 +415,11 @@ export const QueriesModule: React.FC = () => {
                       <h3 className="font-bold text-slate-900 truncate">{q.title}</h3>
                       <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-2">{q.description}</p>
 
-                      <div className="mt-2 flex items-center justify-between text-[10px] text-slate-400">
-                        <span>{q.studentName}</span>
-                        <span className="capitalize text-slate-600 font-medium">{q.category}</span>
+                      <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-500">
+                        <span className="truncate">To: <strong className="text-slate-700">{q.recipientName || q.assignedTo || 'Department'}</strong></span>
+                        <span className="font-mono font-semibold px-1 py-0.2 rounded bg-slate-100 text-slate-600 shrink-0">
+                          {q.recipientDepartment || q.department}
+                        </span>
                       </div>
                     </div>
                   );
@@ -320,13 +429,13 @@ export const QueriesModule: React.FC = () => {
           </div>
 
           {/* Selected Ticket Conversation Thread */}
-          <div className="lg:col-span-2 bg-white rounded-lg border border-[#E2E8F0] flex flex-col justify-between overflow-hidden shadow-2xs">
+          <div className="lg:col-span-2 bg-white rounded-lg border border-[#E2E8F0] flex flex-col justify-between overflow-hidden shadow-2xs min-h-[500px]">
             {selectedQuery ? (
               <>
                 {/* Header */}
                 <div className="p-4 border-b border-[#E2E8F0] flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[#F8FAFC]">
                   <div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-800 font-mono text-xs font-bold">
                         {selectedQuery.ticketId}
                       </span>
@@ -343,38 +452,50 @@ export const QueriesModule: React.FC = () => {
                         {selectedQuery.priority} Priority
                       </span>
                     </div>
+
                     <h2 className="text-sm font-bold text-[#0F172A] mt-1.5">{selectedQuery.title}</h2>
-                    <p className="text-[11px] text-slate-500 mt-0.5">
-                      Submitted by: <strong className="text-slate-800">{selectedQuery.studentName}</strong> ({selectedQuery.usn}) • {selectedQuery.createdAt} • Assigned to: <strong className="text-slate-800">{selectedQuery.assignedTo}</strong>
-                    </p>
+
+                    <div className="text-[11px] text-slate-500 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <span>From: <strong className="text-slate-800">{selectedQuery.studentName}</strong> ({selectedQuery.usn || selectedQuery.senderRole})</span>
+                      <span>•</span>
+                      <span>Target Authority: <strong className="text-indigo-700">{selectedQuery.recipientName || selectedQuery.assignedTo}</strong></span>
+                      <span>•</span>
+                      <span>Department: <strong className="font-mono text-slate-800">{selectedQuery.recipientDepartment || selectedQuery.department}</strong></span>
+                      <span>•</span>
+                      <span>{selectedQuery.createdAt}</span>
+                    </div>
                   </div>
 
-                  {/* Status Toggle Action */}
+                  {/* Actions */}
                   <div className="shrink-0 flex items-center gap-2">
-                    {selectedQuery.status !== 'resolved' ? (
-                      <button
-                        onClick={() => handleStatusChange(selectedQuery.id, 'resolved')}
-                        className="px-3 py-1 rounded-md bg-[#10B981] hover:bg-emerald-700 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-                      >
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        Mark Resolved
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => handleStatusChange(selectedQuery.id, 'in_progress')}
-                        className="px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs flex items-center gap-1 transition-colors cursor-pointer"
-                      >
-                        Reopen Ticket
-                      </button>
+                    {canManageSelectedTicket && (
+                      selectedQuery.status !== 'resolved' ? (
+                        <button
+                          onClick={() => handleStatusChange(selectedQuery.id, 'resolved')}
+                          className="px-3 py-1 rounded-md bg-[#10B981] hover:bg-emerald-700 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          Mark Resolved
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleStatusChange(selectedQuery.id, 'in_progress')}
+                          className="px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs flex items-center gap-1 transition-colors cursor-pointer"
+                        >
+                          Reopen Ticket
+                        </button>
+                      )
                     )}
 
-                    <button
-                      onClick={() => setDeletingQueryId(selectedQuery.id)}
-                      title="Delete Ticket"
-                      className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors cursor-pointer"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    {canDeleteSelectedTicket && (
+                      <button
+                        onClick={() => setDeletingQueryId(selectedQuery.id)}
+                        title="Delete Ticket"
+                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors cursor-pointer"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -383,7 +504,9 @@ export const QueriesModule: React.FC = () => {
                   {/* Initial Query Description */}
                   <div className="p-3.5 rounded-lg bg-slate-50 border border-slate-200">
                     <div className="flex items-center justify-between text-slate-500 mb-1.5 text-[11px]">
-                      <span className="font-semibold text-slate-800">{selectedQuery.studentName} (Student)</span>
+                      <span className="font-semibold text-slate-800">
+                        {selectedQuery.studentName} ({selectedQuery.senderRole?.toUpperCase() || 'SENDER'})
+                      </span>
                       <span>{selectedQuery.createdAt}</span>
                     </div>
                     <p className="text-slate-700 leading-relaxed text-xs">{selectedQuery.description}</p>
@@ -438,7 +561,7 @@ export const QueriesModule: React.FC = () => {
         </div>
       )}
 
-      {/* Submit Query Modal */}
+      {/* Submit Query Modal with Explicit Recipient Architecture */}
       {isSubmitModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95">
@@ -449,7 +572,7 @@ export const QueriesModule: React.FC = () => {
               </div>
               <button
                 onClick={() => setIsSubmitModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-md"
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-md cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -479,6 +602,7 @@ export const QueriesModule: React.FC = () => {
                     <option value="academic">Academic & Syllabus</option>
                     <option value="exam">Internal Assessment / Exam</option>
                     <option value="lab">Lab Operations & Systems</option>
+                    <option value="admin">Institutional Administration</option>
                   </select>
                 </div>
 
@@ -496,20 +620,78 @@ export const QueriesModule: React.FC = () => {
                 </div>
               </div>
 
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Assign To Faculty / Staff</label>
-                <select
-                  value={assignedToStaff}
-                  onChange={e => setAssignedToStaff(e.target.value)}
-                  className="w-full text-xs p-2 rounded-md border border-[#E2E8F0] bg-[#F8FAFC] font-medium text-slate-900 focus:bg-white focus:ring-1 focus:ring-[#4F46E5]"
-                >
-                  <option value="">Department Academic Office (General Escalation)</option>
-                  {facultyAndStaff.map(u => (
-                    <option key={u.id} value={u.name}>
-                      {u.name} ({u.designation || u.role.toUpperCase()})
-                    </option>
-                  ))}
-                </select>
+              {/* Explicit Ownership & Target Recipient Selection */}
+              <div className="p-3.5 rounded-lg bg-indigo-50/50 border border-indigo-100 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-indigo-950 uppercase tracking-wider flex items-center gap-1.5">
+                    <Building2 className="w-3.5 h-3.5 text-[#4F46E5]" />
+                    Designated Recipient & Authority *
+                  </span>
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-800">
+                    Confidential
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Whom are you addressing?</label>
+                    <select
+                      value={recipientTarget}
+                      onChange={e => setRecipientTarget(e.target.value as any)}
+                      className="w-full text-xs p-2 rounded-md border border-[#CBD5E1] bg-white font-semibold text-slate-900 focus:ring-1 focus:ring-[#4F46E5]"
+                    >
+                      <option value="hod">Head of Department (HOD)</option>
+                      <option value="faculty">Specific Faculty Member / Teacher</option>
+                      <option value="lab_assistant">Laboratory In-Charge</option>
+                      <option value="admin">Office of the Academic Dean</option>
+                    </select>
+                  </div>
+
+                  {recipientTarget !== 'admin' && (
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Target Department</label>
+                      <select
+                        value={recipientDeptCode}
+                        onChange={e => {
+                          setRecipientDeptCode(e.target.value);
+                          setRecipientFacultyId('');
+                        }}
+                        className="w-full text-xs p-2 rounded-md border border-[#CBD5E1] bg-white font-semibold text-slate-900 focus:ring-1 focus:ring-[#4F46E5]"
+                      >
+                        {departments.map(d => (
+                          <option key={d.id} value={d.code}>
+                            {d.code} — {d.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+
+                {/* If addressing faculty, offer dropdown of faculty in chosen department */}
+                {recipientTarget === 'faculty' && (
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Select Faculty Member ({recipientDeptCode})
+                    </label>
+                    <select
+                      value={recipientFacultyId}
+                      onChange={e => setRecipientFacultyId(e.target.value)}
+                      className="w-full text-xs p-2 rounded-md border border-[#CBD5E1] bg-white font-medium text-slate-900 focus:ring-1 focus:ring-[#4F46E5]"
+                    >
+                      <option value="">All Faculty of {recipientDeptCode} (General)</option>
+                      {deptFaculty.map(f => (
+                        <option key={f.id} value={f.id}>
+                          Prof. {f.name} ({f.designation || 'Faculty Member'})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <p className="text-[10px] text-slate-500 leading-relaxed italic">
+                  Privacy Guarantee: Only you and the designated {recipientTarget === 'hod' ? `HOD of ${recipientDeptCode}` : recipientTarget === 'faculty' ? `Faculty of ${recipientDeptCode}` : recipientTarget === 'lab_assistant' ? `Lab In-Charge of ${recipientDeptCode}` : 'Dean'} will be able to view this query.
+                </p>
               </div>
 
               <div>

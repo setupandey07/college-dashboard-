@@ -118,6 +118,7 @@ export interface TimetableCell {
   facultyId?: string;
   facultyName?: string;
   roomNumber?: string;
+  room?: string;
   type?: 'theory' | 'lab' | 'integrated';
   credits?: number;
 }
@@ -142,6 +143,39 @@ export interface ClassTimetable {
 }
 
 const COLLECTION = 'timetables';
+
+export function subscribeAllTimetables(
+  onData: (timetables: ClassTimetable[]) => void,
+  onError?: (err: Error) => void
+): Unsubscribe {
+  const colRef = collection(db, COLLECTION);
+  return onSnapshot(
+    colRef,
+    (snapshot) => {
+      const list = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          sectionId: data.sectionId || doc.id,
+          departmentCode: data.departmentCode || '',
+          departmentName: data.departmentName || '',
+          academicYear: data.academicYear || '',
+          sectionName: data.sectionName || '',
+          slotsConfig: data.slotsConfig && data.slotsConfig.length > 0 ? data.slotsConfig : DEFAULT_TIMETABLE_SLOTS,
+          schedule: data.schedule || {}
+        } as ClassTimetable;
+      });
+      onData(list);
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, COLLECTION);
+      } catch (err: any) {
+        if (onError) onError(err);
+      }
+    }
+  );
+}
 
 export function subscribeTimetable(
   sectionId: string,

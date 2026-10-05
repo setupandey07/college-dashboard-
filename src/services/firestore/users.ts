@@ -175,6 +175,18 @@ export async function updateUserProfile(userId: string, partial: Partial<UserPro
 }
 
 export async function deleteUser(userId: string): Promise<void> {
+  // Institutional Admin Protection: Prevent deletion of Admin accounts at application logic layer
+  if (userId === 'u-admin-1') {
+    throw new Error('CRITICAL SECURITY VIOLATION: Primary institutional Administrator (u-admin-1) is protected and cannot be deleted.');
+  }
+
+  const existing = await getUserById(userId);
+  if (existing) {
+    if (existing.role === 'admin' || existing.email?.toLowerCase().includes('admin@')) {
+      throw new Error('CRITICAL SECURITY VIOLATION: Administrator accounts are strictly protected from deletion.');
+    }
+  }
+
   const path = `${COLLECTION}/${userId}`;
   try {
     const docRef = doc(db, COLLECTION, userId);

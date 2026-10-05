@@ -13,4 +13,6 @@ export * from './labEquipment';
 export * from './workloads';
 export * from './notifications';
 export * from './timetables';
+export * from './batches';
+export * from './notes';
 export * from './seed';

@@ -109,7 +109,8 @@ export async function createOrUpdateStudentProfile(
   uid: string,
   email: string,
   displayName?: string,
-  photoURL?: string
+  photoURL?: string,
+  isProfileComplete = false
 ): Promise<{ user: UserProfile; student: StudentRecord }> {
   const normEmail = (email || '').trim().toLowerCase();
   const emailPrefix = normEmail.split('@')[0] || 'student';
@@ -119,27 +120,11 @@ export async function createOrUpdateStudentProfile(
     ? displayName.trim()
     : `Student ${rollNumber}`;
 
-  // Parse department if indicated, default to Computer Science & Engineering
-  let deptName = 'Computer Science & Engineering';
-  let deptCode = 'CSE';
-  let deptId = 'dept-cse';
-  if (normEmail.includes('ece')) {
-    deptName = 'Electronics & Communication Engineering';
-    deptCode = 'ECE';
-    deptId = 'dept-ece';
-  } else if (normEmail.includes('eee')) {
-    deptName = 'Electrical & Electronics Engineering';
-    deptCode = 'EEE';
-    deptId = 'dept-eee';
-  } else if (normEmail.includes('mech')) {
-    deptName = 'Mechanical Engineering';
-    deptCode = 'MECH';
-    deptId = 'dept-mech';
-  } else if (normEmail.includes('civil')) {
-    deptName = 'Civil Engineering';
-    deptCode = 'CIVIL';
-    deptId = 'dept-civil';
-  }
+  // Explicitly initialize academic placement as Unassigned for new users
+  // User must select Department, Academic Year, Semester, and Section during setup
+  const deptName = 'Unassigned Department';
+  const deptCode = 'UNASSIGNED';
+  const deptId = 'unassigned';
 
   const studentRecord: StudentRecord = {
     id: uid || `stu-${emailPrefix}`,
@@ -150,10 +135,10 @@ export async function createOrUpdateStudentProfile(
     registrationNumber: rollNumber,
     departmentId: deptId,
     departmentName: deptName,
-    year: 3,
-    section: 'A',
-    semester: 5,
-    admissionYear: 2022,
+    year: 0,
+    section: '',
+    semester: 0,
+    admissionYear: new Date().getFullYear(),
     status: 'active'
   };
 
@@ -164,13 +149,14 @@ export async function createOrUpdateStudentProfile(
     role: 'student',
     department: deptName,
     departmentCode: deptCode,
-    phone: '+91 91760 33412',
+    phone: '',
     regId: rollNumber,
-    designation: `B.Tech ${deptCode} - Semester 5`,
-    semester: 5,
-    section: 'A',
-    joiningYear: '2022',
+    designation: 'Undergraduate Student (Unassigned)',
+    semester: 0,
+    section: '',
+    joiningYear: String(new Date().getFullYear()),
     status: 'active',
+    isProfileComplete: false,
     avatar:
       photoURL ||
       'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80'

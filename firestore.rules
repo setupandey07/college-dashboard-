@@ -36,7 +36,8 @@ service cloud.firestore {
         getUserRole() == 'admin' ||
         request.auth.token.email == 'pkr02042006@gmail.com' ||
         request.auth.token.email == 'startup5077@gmail.com' ||
-        request.auth.token.email == '525077@student.nitandhra.ac.in' ||
+        request.auth.token.email == 'principal@academiccore.edu' ||
+        request.auth.token.email == 'admin@academiccore.edu' ||
         request.auth.uid == 'u-admin-1'
       );
     }
@@ -56,6 +57,16 @@ service cloud.firestore {
       );
     }
 
+    function getUserDeptCode() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        ? (
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.departmentCode != null
+              ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.departmentCode
+              : get(/databases/$(database)/documents/users/$(request.auth.uid)).data.department
+          )
+        : '';
+    }
+
     // 1. System Metadata & Health Connection Check
     match /system/{docId} {
       allow read: if true; // Connection handshake check
@@ -72,15 +83,40 @@ service cloud.firestore {
       allow create: if isSignedIn() && (isAdmin() || request.auth.uid == userId);
       allow update: if (
         isAdmin() ||
-        (isSignedIn() && request.auth.uid == userId && !incoming().diff(existing()).affectedKeys().hasAny(['role', 'departmentCode', 'regId', 'status', 'section', 'semester']))
+        // HOD can update members within their own department (cannot modify admin accounts or tamper with roles):
+        (getUserRole() == 'hod' && existing().role != 'admin' && (
+          existing().departmentCode == getUserDeptCode() || existing().department == getUserDeptCode()
+        ) && !incoming().diff(existing()).affectedKeys().hasAny(['role', 'id', 'uid'])) ||
+        // Self-profile update
+        (isSignedIn() && request.auth.uid == userId && 
+         // Absolute protection against privilege escalation:
+         !incoming().diff(existing()).affectedKeys().hasAny([
+           'role', 'regId', 'email', 'status', 'id', 'uid'
+         ]) &&
+         // Students cannot self-alter their statutory class placement:
+         (getUserRole() != 'student' || !incoming().diff(existing()).affectedKeys().hasAny([
+           'department', 'departmentCode', 'section', 'semester', 'currentAcademicYear'
+         ]))
+        )
       );
-      allow delete: if isAdmin();
+      // Absolute Admin Protection: No user or HOD can delete an Administrator account or u-admin-1
+      allow delete: if isAdmin() && userId != 'u-admin-1' && existing().role != 'admin';
     }
 
-    // 3. Students Collection
+    // 3. Students Collection (Academic & Student Profile)
     match /students/{studentId} {
       allow read: if isSignedIn();
-      allow write: if isFacultyOrHod() || isAdmin();
+      allow create: if isSignedIn() && (isAdmin() || request.auth.uid == studentId);
+      allow update: if (
+        isAdmin() ||
+        isFacultyOrHod() ||
+        (isSignedIn() && (request.auth.uid == studentId || existing().userId == request.auth.uid) &&
+         !incoming().diff(existing()).affectedKeys().hasAny([
+           'rollNumber', 'registrationNumber', 'email', 'name', 'departmentId', 
+           'departmentName', 'status', 'year', 'semester', 'section', 'id', 'userId'
+         ]))
+      );
+      allow delete: if isAdmin();
     }
 
     // 4. Academic Departments & Sections
@@ -103,7 +139,17 @@ service cloud.firestore {
     // 6. Attendance Sessions & Records
     match /attendanceSessions/{sessionId} {
       allow read: if isSignedIn();
-      allow write: if isFacultyOrHod() || isAdmin();
+      allow create: if isFacultyOrHod() || isAdmin();
+      allow update: if isAdmin() || (
+        isFacultyOrHod() && (
+          (getUserRole() == 'hod' && (
+            existing().departmentCode == getUserDeptCode() || 
+            existing().department == getUserDeptCode()
+          )) ||
+          (getUserRole() == 'faculty' && existing().facultyId == request.auth.uid)
+        )
+      );
+      allow delete: if isAdmin();
     }
 
     match /attendance/{recordId} {
@@ -116,10 +162,24 @@ service cloud.firestore {
       allow write: if isFacultyOrHod() || isAdmin();
     }
 
-    // 7. Assessments & Marks (Strictly protected from student mutation)
+    // 7. Assessments & Marks (Strictly protected from student mutation; role & department scoped)
     match /assessments/{assessmentId} {
       allow read: if isSignedIn();
-      allow write: if isFacultyOrHod() || isAdmin();
+      allow write: if isAdmin() || (
+        isFacultyOrHod() && (
+          (getUserRole() == 'hod' && (
+            incoming().departmentCode == getUserDeptCode() || 
+            incoming().department == getUserDeptCode() ||
+            existing().departmentCode == getUserDeptCode()
+          )) ||
+          (getUserRole() == 'faculty' && (
+            incoming().facultyId == request.auth.uid ||
+            existing().facultyId == request.auth.uid ||
+            incoming().departmentCode == getUserDeptCode() ||
+            incoming().department == getUserDeptCode()
+          ))
+        )
+      );
     }
 
     match /marks/{markId} {
@@ -132,15 +192,64 @@ service cloud.firestore {
       allow write: if isFacultyOrHod() || isAdmin();
     }
 
-    // 8. Queries & Grievances
+    // 8. Queries & Grievances (Strict Student A <-> Faculty B Isolation)
     match /queries/{queryId} {
-      allow read: if isSignedIn();
+      function isQueryOwnerOrRecipient() {
+        return isAdmin() ||
+          // User is creator / sender (Student A)
+          resource.data.createdByUserId == request.auth.uid ||
+          resource.data.createdBy == request.auth.uid ||
+          resource.data.studentId == request.auth.uid ||
+          (resource.data.senderEmail != null && resource.data.senderEmail == request.auth.token.email) ||
+          // User is direct assigned recipient (Faculty B)
+          resource.data.recipientUserId == request.auth.uid ||
+          resource.data.recipientId == request.auth.uid ||
+          // User is HOD of the targeted department (Administrative oversight within department)
+          (getUserRole() == 'hod' && (
+            resource.data.recipientUserId == request.auth.uid ||
+            resource.data.recipientId == request.auth.uid ||
+            (resource.data.recipientDepartment != null && resource.data.recipientDepartment == getUserDeptCode()) ||
+            (resource.data.departmentId != null && resource.data.departmentId == getUserDeptCode()) ||
+            (resource.data.department != null && resource.data.department == getUserDeptCode())
+          )) ||
+          // User is Lab Assistant targeted directly
+          (getUserRole() == 'lab_assistant' && (
+            resource.data.recipientUserId == request.auth.uid ||
+            resource.data.recipientId == request.auth.uid
+          ));
+      }
+
+      // Single document get: strictly protected against accessing by ID or changing URL
+      allow get: if isSignedIn() && isQueryOwnerOrRecipient();
+
+      // List queries: allowed for admin or if user is owner/recipient
+      allow list: if isSignedIn() && isQueryOwnerOrRecipient();
+
       allow create: if isSignedIn();
-      allow update: if isSignedIn() && (isAdmin() || isFacultyOrHod() || resource.data.studentId == request.auth.uid);
-      allow delete: if isAdmin();
+
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        isQueryOwnerOrRecipient()
+      );
+
+      allow delete: if isAdmin() || (isSignedIn() && (
+        resource.data.createdByUserId == request.auth.uid ||
+        resource.data.createdBy == request.auth.uid
+      ));
 
       match /responses/{responseId} {
-        allow read: if isSignedIn();
+        allow get, list: if isSignedIn() && (
+          isAdmin() ||
+          get(/databases/$(database)/documents/queries/$(queryId)).data.createdByUserId == request.auth.uid ||
+          get(/databases/$(database)/documents/queries/$(queryId)).data.createdBy == request.auth.uid ||
+          get(/databases/$(database)/documents/queries/$(queryId)).data.recipientUserId == request.auth.uid ||
+          get(/databases/$(database)/documents/queries/$(queryId)).data.recipientId == request.auth.uid ||
+          (getUserRole() == 'hod' && (
+            get(/databases/$(database)/documents/queries/$(queryId)).data.recipientDepartment == getUserDeptCode() ||
+            get(/databases/$(database)/documents/queries/$(queryId)).data.departmentId == getUserDeptCode() ||
+            get(/databases/$(database)/documents/queries/$(queryId)).data.department == getUserDeptCode()
+          ))
+        );
         allow create: if isSignedIn();
         allow update, delete: if isAdmin();
       }
@@ -178,10 +287,19 @@ service cloud.firestore {
       allow write: if isFacultyOrHod() || isAdmin();
     }
 
-    // 13. Notifications
+    // 13. Private Notifications (Strict Recipient Isolation)
     match /notifications/{notificationId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn();
+      allow read: if isSignedIn() && (
+        isAdmin() ||
+        resource.data.recipientUserId == request.auth.uid ||
+        resource.data.userId == request.auth.uid
+      );
+      allow create: if isSignedIn();
+      allow update, delete: if isSignedIn() && (
+        isAdmin() ||
+        resource.data.recipientUserId == request.auth.uid ||
+        resource.data.userId == request.auth.uid
+      );
     }
 
     // 14. Audit Logs (Append-only; never editable or deletable)
@@ -195,6 +313,48 @@ service cloud.firestore {
     match /timetables/{sectionId} {
       allow read: if isSignedIn();
       allow write: if isFacultyOrHod() || isAdmin();
+    }
+
+    // 16. Academic Batches Collection
+    match /batches/{batchId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin() || (
+        getUserRole() == 'hod' && (
+          incoming().departmentCode == null ||
+          incoming().departmentCode == 'all' ||
+          incoming().departmentCode == getUserDeptCode()
+        )
+      );
+      allow delete: if isAdmin();
+    }
+
+    // 17. Master Notes & Learning Materials Repository (College-wide Access)
+    match /notes/{noteId} {
+      // Students and all institutional members can read permitted repository notes
+      allow read: if isSignedIn();
+
+      // Faculty, HOD, and Admin can upload notes with verified author identification
+      allow create: if (isFacultyOrHod() || isAdmin()) && (
+        incoming().uploadedBy == request.auth.uid || isAdmin()
+      );
+
+      // Updates: Admin can update any; HOD can update their department's notes; Faculty only their own notes
+      allow update: if isAdmin() || (
+        (getUserRole() == 'hod' && (
+          existing().departmentCode == getUserDeptCode() ||
+          existing().department == getUserDeptCode()
+        )) ||
+        (getUserRole() == 'faculty' && existing().uploadedBy == request.auth.uid)
+      );
+
+      // Deletes: Admin can delete any; HOD can delete in their department; Faculty only their own notes
+      allow delete: if isAdmin() || (
+        (getUserRole() == 'hod' && (
+          existing().departmentCode == getUserDeptCode() ||
+          existing().department == getUserDeptCode()
+        )) ||
+        (getUserRole() == 'faculty' && existing().uploadedBy == request.auth.uid)
+      );
     }
   }
 }

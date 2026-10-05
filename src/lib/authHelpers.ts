@@ -59,14 +59,12 @@ const ALLOWLISTED_DEV_ADMIN_EMAILS = new Set<string>([
   'startup5077@gmail.com',
   'startup5077@academiccore.edu',
   'startup5077',
-  '525077@student.nitandhra.ac.in',
-  '525077',
-  'principal@academiccore.edu'
+  'principal@academiccore.edu',
+  'admin@academiccore.edu'
 ]);
 
 const ALLOWLISTED_DEV_ADMIN_UIDS = new Set<string>([
   'startup5077',
-  '525077',
   'u-admin-1'
 ]);
 

@@ -35,8 +35,7 @@ import {
   TIMETABLE_DAYS,
   DEFAULT_TIMETABLE_SLOTS,
   TimetableSlotConfig,
-  subscribeTimetable,
-  updateTimetableSlot
+  subscribeTimetable
 } from '../../services/firestore/timetables';
 
 interface ClassDetailsModuleProps {
@@ -63,7 +62,8 @@ export const ClassDetailsModule: React.FC<ClassDetailsModuleProps> = ({
     updateSection,
     createSubject,
     updateSubject,
-    deleteSubject
+    deleteSubject,
+    updateTimetableSlot
   } = useAcademicData();
 
   const isAdmin = currentRole === 'admin';

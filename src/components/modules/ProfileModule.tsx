@@ -16,13 +16,28 @@ import {
   Image,
   Phone,
   User,
-  HeartHandshake
+  HeartHandshake,
+  CalendarCheck,
+  Users
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { UserProfile } from '../../types';
+import { useAcademicData } from '../../context/AcademicDataContext';
+import { UserProfile, Subject } from '../../types';
+import { resolveStudentAttendance, computeAttendanceAggregate } from '../../lib/attendanceCalculations';
 
 export const ProfileModule: React.FC = () => {
   const { currentUser, currentRole, actualRole, isSimulatingRole, updateCurrentUserProfile } = useAuth();
+  const {
+    studentAttendance,
+    attendanceSessions,
+    students,
+    users,
+    departments,
+    subjects,
+    sections,
+    updateSubject,
+    createSubject
+  } = useAcademicData();
 
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -57,6 +72,14 @@ export const ProfileModule: React.FC = () => {
   const [officeRoomNumber, setOfficeRoomNumber] = useState(currentUser.officeRoomNumber || '');
   const [officialContact, setOfficialContact] = useState(currentUser.officialContact || '');
 
+  // Authoritative Faculty Academic Assignment State (Requirement 3)
+  const [facultyDeptCode, setFacultyDeptCode] = useState(currentUser.departmentCode || currentUser.department || 'EEE');
+  const [assignedYear, setAssignedYear] = useState<string>(currentUser.assignedYear ? String(currentUser.assignedYear) : '2nd Year');
+  const [assignedSection, setAssignedSection] = useState<string>(currentUser.assignedSection || 'Section B');
+  const [assignedSubjectId, setAssignedSubjectId] = useState<string>(currentUser.assignedSubjectId || '');
+  const [customSubjectName, setCustomSubjectName] = useState<string>('');
+  const [customSubjectCode, setCustomSubjectCode] = useState<string>('');
+
   // Sync state whenever currentUser changes
   useEffect(() => {
     setAvatar(currentUser.avatar || '');
@@ -81,6 +104,12 @@ export const ProfileModule: React.FC = () => {
     setExperience(currentUser.experience || '');
     setOfficeRoomNumber(currentUser.officeRoomNumber || '');
     setOfficialContact(currentUser.officialContact || '');
+
+    // Faculty Assignment sync
+    setFacultyDeptCode(currentUser.departmentCode || currentUser.department || 'EEE');
+    setAssignedYear(currentUser.assignedYear ? String(currentUser.assignedYear) : '2nd Year');
+    setAssignedSection(currentUser.assignedSection || 'Section B');
+    setAssignedSubjectId(currentUser.assignedSubjectId || '');
   }, [currentUser]);
 
   const showNotification = (type: 'success' | 'error', message: string) => {
@@ -116,6 +145,13 @@ export const ProfileModule: React.FC = () => {
     setExperience(currentUser.experience || '');
     setOfficeRoomNumber(currentUser.officeRoomNumber || '');
     setOfficialContact(currentUser.officialContact || '');
+
+    setFacultyDeptCode(currentUser.departmentCode || currentUser.department || 'EEE');
+    setAssignedYear(currentUser.assignedYear ? String(currentUser.assignedYear) : '2nd Year');
+    setAssignedSection(currentUser.assignedSection || 'Section B');
+    setAssignedSubjectId(currentUser.assignedSubjectId || '');
+    setCustomSubjectName('');
+    setCustomSubjectCode('');
     setIsEditing(false);
   };
 
@@ -138,9 +174,10 @@ export const ProfileModule: React.FC = () => {
 
       if (currentUser.role === 'student') {
         updatedFields.parentName = parentName.trim();
+        updatedFields.guardianName = parentName.trim();
         updatedFields.parentPhone = parentPhone.trim();
+        updatedFields.guardianContact = parentPhone.trim();
         updatedFields.admissionYear = admissionYear.trim() ? Number(admissionYear) : 2022;
-        updatedFields.currentAcademicYear = currentAcademicYear;
       } else {
         // Faculty / HOD / Admin
         updatedFields.qualification = qualification.trim();
@@ -149,11 +186,78 @@ export const ProfileModule: React.FC = () => {
         updatedFields.experience = experience.trim();
         updatedFields.officeRoomNumber = officeRoomNumber.trim();
         updatedFields.officialContact = officialContact.trim();
+
+        // 1. Department Mapping (Requirement 2 & 3)
+        const matchedDept = departments.find(
+          d => d.code === facultyDeptCode || d.name === facultyDeptCode || d.id === facultyDeptCode
+        );
+        if (matchedDept) {
+          updatedFields.department = matchedDept.name;
+          updatedFields.departmentCode = matchedDept.code;
+        } else if (facultyDeptCode) {
+          updatedFields.department = facultyDeptCode;
+          updatedFields.departmentCode = facultyDeptCode;
+        }
+
+        // 2. Academic Year and Section
+        updatedFields.assignedYear = assignedYear;
+        updatedFields.assignedSection = assignedSection;
+
+        // 3. Subject Relationship Creation/Assignment (Requirement 3)
+        const yearNum = parseInt(assignedYear.replace(/\D/g, '')) || 2;
+        const normSection = assignedSection.replace(/^Section\s+/i, '').trim() || 'B';
+        let finalSubId = assignedSubjectId;
+        let finalSubName = currentUser.assignedSubjectName || '';
+        let finalSubCode = currentUser.assignedSubjectCode || '';
+
+        if (assignedSubjectId === 'NEW' && customSubjectName.trim()) {
+          const genCode = customSubjectCode.trim() || customSubjectName.substring(0, 6).toUpperCase().replace(/\s+/g, '');
+          const newSub: Subject = {
+            id: `sub-${Date.now()}`,
+            code: genCode,
+            name: customSubjectName.trim(),
+            department: updatedFields.department || currentUser.department || 'Electrical & Electronics Engineering',
+            departmentCode: updatedFields.departmentCode || currentUser.departmentCode || 'EEE',
+            year: yearNum,
+            semester: yearNum * 2 - 1,
+            section: normSection,
+            credits: 3,
+            type: 'theory',
+            facultyId: currentUser.id,
+            facultyName: currentUser.name,
+            totalHoursPlanned: 45,
+            hoursConducted: 0,
+            units: [],
+            status: 'on_track'
+          };
+          await createSubject(newSub);
+          finalSubId = newSub.id;
+          finalSubName = newSub.name;
+          finalSubCode = newSub.code;
+        } else if (assignedSubjectId && assignedSubjectId !== 'NONE') {
+          const existingSub = subjects.find(s => s.id === assignedSubjectId);
+          if (existingSub) {
+            finalSubName = existingSub.name;
+            finalSubCode = existingSub.code;
+            await updateSubject(existingSub.id, {
+              facultyId: currentUser.id,
+              facultyName: currentUser.name,
+              section: normSection,
+              year: yearNum,
+              department: updatedFields.department || existingSub.department,
+              departmentCode: updatedFields.departmentCode || existingSub.departmentCode
+            });
+          }
+        }
+
+        updatedFields.assignedSubjectId = finalSubId;
+        updatedFields.assignedSubjectName = finalSubName;
+        updatedFields.assignedSubjectCode = finalSubCode;
       }
 
       await updateCurrentUserProfile(updatedFields);
       setIsEditing(false);
-      showNotification('success', 'Profile updated successfully and synced to your authoritative collegiate record!');
+      showNotification('success', 'Profile and authoritative academic relationships successfully committed to database!');
     } catch (err: any) {
       showNotification('error', err?.message || 'Failed to update profile. Please check connection and try again.');
     } finally {
@@ -161,9 +265,84 @@ export const ProfileModule: React.FC = () => {
     }
   };
 
-  const isStudent = currentUser.role === 'student';
-  const isFacultyOrHod = currentUser.role === 'faculty' || currentUser.role === 'hod';
-  const isAdmin = currentUser.role === 'admin';
+  // Trusted database role verification: Never derive student status from temporary UI simulation state
+  const isRealStudent = actualRole === 'student';
+  const isStudent = isRealStudent;
+  const isFacultyOrHod = actualRole === 'faculty' || actualRole === 'hod';
+  const isAdmin = actualRole === 'admin';
+
+  // Strict identity binding: Profile reflects ONLY the authenticated user
+  const targetId = currentUser.id;
+  const targetReg = currentUser.regId;
+  const targetName = currentUser.name;
+
+  // Authoritative real database attendance records: Isolated strictly to real student accounts
+  const effectiveAttendance = isRealStudent
+    ? resolveStudentAttendance(
+        targetId,
+        targetReg,
+        attendanceSessions,
+        studentAttendance
+      )
+    : [];
+
+  const { totalClasses, attendedClasses: totalAttended, absentClasses: totalAbsent, percentage: overallPercentage } =
+    computeAttendanceAggregate(effectiveAttendance);
+
+  const legacyDerived = (() => {
+        const sessionsForStudent = attendanceSessions.filter(sess =>
+          sess.records?.some(r => {
+            const rid = (r.studentId || '').toLowerCase();
+            const rusn = (r.usn || '').toLowerCase();
+            const tid = (targetId || '').toLowerCase();
+            const treg = (targetReg || '').toLowerCase();
+            return (tid && (rid === tid || rusn === tid)) || (treg && (rid === treg || rusn === treg));
+          })
+        );
+        if (sessionsForStudent.length === 0) return [];
+
+        const bySubject = new Map<string, typeof sessionsForStudent>();
+        for (const s of sessionsForStudent) {
+          const list = bySubject.get(s.subjectCode) || [];
+          list.push(s);
+          bySubject.set(s.subjectCode, list);
+        }
+
+        const derived: typeof studentAttendance = [];
+        bySubject.forEach((sessions, subCode) => {
+          const first = sessions[0];
+          const total = sessions.length;
+          let attended = 0;
+          for (const s of sessions) {
+            const rec = s.records.find(r => {
+              const rid = (r.studentId || '').toLowerCase();
+              const rusn = (r.usn || '').toLowerCase();
+              const tid = (targetId || '').toLowerCase();
+              const treg = (targetReg || '').toLowerCase();
+              return (tid && (rid === tid || rusn === tid)) || (treg && (rid === treg || rusn === treg));
+            });
+            if (rec?.status === 'present') attended++;
+          }
+          const absent = Math.max(0, total - attended);
+          const pct = total > 0 ? Number(((attended / total) * 100).toFixed(1)) : 0;
+          derived.push({
+            subjectId: first.subjectId,
+            subjectCode: subCode,
+            subjectName: first.subjectName,
+            facultyName: first.facultyName || 'Course Faculty',
+            totalClasses: total,
+            attendedClasses: attended,
+            absentClasses: absent,
+            percentage: pct,
+            studentId: targetId,
+            usn: targetReg,
+            status: pct >= 75 ? 'safe' : pct >= 65 ? 'warning' : 'critical'
+          });
+        });
+        return derived;
+      })();
+
+
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto pb-10">
@@ -569,56 +748,58 @@ export const ProfileModule: React.FC = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                    Admission Year
-                  </label>
-                  <input
-                    type="number"
-                    placeholder="e.g. 2022"
-                    value={admissionYear}
-                    disabled={!isEditing}
-                    onChange={e => setAdmissionYear(e.target.value)}
-                    className="w-full p-2 rounded-md border border-[#E2E8F0] bg-[#F8FAFC] focus:bg-white text-slate-800 disabled:opacity-75 disabled:bg-slate-50"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                    Current Academic Year
-                  </label>
-                  <select
-                    value={currentAcademicYear}
-                    disabled={!isEditing}
-                    onChange={e => setCurrentAcademicYear(e.target.value)}
-                    className="w-full p-2 rounded-md border border-[#E2E8F0] bg-[#F8FAFC] focus:bg-white text-slate-800 disabled:opacity-75 disabled:bg-slate-50 font-medium"
-                  >
-                    <option value="1st Year">1st Year</option>
-                    <option value="2nd Year">2nd Year</option>
-                    <option value="3rd Year">3rd Year</option>
-                    <option value="4th Year">4th Year</option>
-                  </select>
-                </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                  Admission Year
+                </label>
+                <input
+                  type="number"
+                  placeholder="e.g. 2022"
+                  value={admissionYear}
+                  disabled={!isEditing}
+                  onChange={e => setAdmissionYear(e.target.value)}
+                  className="w-full sm:w-1/2 p-2 rounded-md border border-[#E2E8F0] bg-[#F8FAFC] focus:bg-white text-slate-800 disabled:opacity-75 disabled:bg-slate-50"
+                />
               </div>
 
               {/* Locked Student Academic Allocations */}
               <div className="p-3.5 bg-slate-50 rounded-lg border border-slate-200">
-                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-2 flex items-center gap-1">
-                  <Lock className="w-3 h-3 text-slate-400" /> Administrative Academic Placement (Managed by HOD / Admin)
+                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block mb-2 flex items-center gap-1">
+                  <Lock className="w-3 h-3 text-amber-600" /> Controlled Academic Placement (Locked — Governed by Academic Dean & HOD)
                 </span>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                   <div>
-                    <span className="text-slate-500 block text-[10px]">Department</span>
-                    <strong className="text-slate-800">{currentUser.department} ({currentUser.departmentCode})</strong>
+                    <span className="text-slate-500 block text-[10px] uppercase font-bold">Department</span>
+                    <strong className="text-slate-800 text-xs">
+                      {currentUser.departmentCode && currentUser.departmentCode !== 'UNASSIGNED'
+                        ? `${currentUser.department} (${currentUser.departmentCode})`
+                        : 'Unassigned'}
+                    </strong>
                   </div>
                   <div>
-                    <span className="text-slate-500 block text-[10px]">Semester</span>
-                    <strong className="text-slate-800">Semester {currentUser.semester || 5}</strong>
+                    <span className="text-slate-500 block text-[10px] uppercase font-bold">Academic Year</span>
+                    <strong className="text-slate-800 text-xs">
+                      {currentUser.currentAcademicYear ||
+                        (currentUser.semester
+                          ? `${Math.ceil(currentUser.semester / 2)}${Math.ceil(currentUser.semester / 2) === 1 ? 'st' : Math.ceil(currentUser.semester / 2) === 2 ? 'nd' : Math.ceil(currentUser.semester / 2) === 3 ? 'rd' : 'th'} Year`
+                          : 'Unassigned')}
+                    </strong>
                   </div>
                   <div>
-                    <span className="text-slate-500 block text-[10px]">Assigned Section</span>
-                    <strong className="text-slate-800">{currentUser.section ? `Section ${currentUser.section}` : 'Section A'}</strong>
+                    <span className="text-slate-500 block text-[10px] uppercase font-bold">Semester</span>
+                    <strong className="text-slate-800 text-xs">
+                      {currentUser.semester && currentUser.semester > 0
+                        ? `Semester ${currentUser.semester}`
+                        : 'Unassigned'}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block text-[10px] uppercase font-bold">Assigned Section</span>
+                    <strong className="text-slate-800 text-xs">
+                      {currentUser.section
+                        ? (currentUser.section.startsWith('Section') ? currentUser.section : `Section ${currentUser.section}`)
+                        : 'Unassigned'}
+                    </strong>
                   </div>
                 </div>
               </div>
@@ -626,7 +807,136 @@ export const ProfileModule: React.FC = () => {
           </div>
         )}
 
-        {/* Section 4: Faculty / HOD / Admin Professional Details */}
+        {/* Section 4: Official Academic Attendance & Statutory Exam Eligibility */}
+        {isStudent && (
+          <div className="bg-white rounded-lg border border-[#E2E8F0] shadow-2xs overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-slate-100 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <CalendarCheck className="w-4 h-4 text-[#4F46E5]" />
+                <h2 className="text-xs font-bold text-[#0F172A] uppercase tracking-wider">
+                  Academic Attendance & Examination Regulatory Standing
+                </h2>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                  totalClasses === 0
+                    ? 'bg-slate-100 text-slate-600 border-slate-200'
+                    : overallPercentage >= 75
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : 'bg-red-50 text-red-700 border-red-200'
+                }`}>
+                  {totalClasses === 0 ? 'No Records Logged' : overallPercentage >= 75 ? 'Exam Eligible (Compliant)' : 'Shortage Alert (<75%)'}
+                </span>
+              </div>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs">
+              {/* 4 Attendance Metrics */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="p-3.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0]">
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Total Classes</span>
+                  <p className="text-xl font-bold text-slate-900 mt-1">{totalClasses}</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">Conducted sessions</p>
+                </div>
+
+                <div className="p-3.5 rounded-lg bg-emerald-50/50 border border-emerald-200/60">
+                  <span className="text-[10px] text-emerald-700 font-bold uppercase tracking-wider block">Present Classes</span>
+                  <p className="text-xl font-bold text-emerald-700 mt-1">{totalAttended}</p>
+                  <p className="text-[10px] text-emerald-600 mt-0.5">Marked present</p>
+                </div>
+
+                <div className="p-3.5 rounded-lg bg-red-50/50 border border-red-200/60">
+                  <span className="text-[10px] text-red-700 font-bold uppercase tracking-wider block">Absent Classes</span>
+                  <p className="text-xl font-bold text-red-700 mt-1">{totalAbsent}</p>
+                  <p className="text-[10px] text-red-600 mt-0.5">Missed lectures</p>
+                </div>
+
+                <div className="p-3.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0]">
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Aggregate %</span>
+                  <p className={`text-xl font-bold font-mono mt-1 ${
+                    totalClasses === 0 ? 'text-slate-900' : overallPercentage >= 75 ? 'text-emerald-700' : 'text-[#DC2626]'
+                  }`}>
+                    {totalClasses > 0 ? `${overallPercentage}%` : '0%'}
+                  </p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">Required min: 75%</p>
+                </div>
+              </div>
+
+              {/* Subject-Wise Attendance Breakdown */}
+              <div className="border border-[#E2E8F0] rounded-lg overflow-hidden mt-3">
+                <div className="p-3 bg-[#F8FAFC] border-b border-[#E2E8F0] flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-800">
+                    Subject-Wise Attendance Breakdown ({effectiveAttendance.length} Courses)
+                  </span>
+                  <span className="text-[10px] text-slate-500">
+                    Record for: <strong>{targetName}</strong> ({targetReg})
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50 text-[10px] uppercase font-bold text-slate-500 tracking-wider border-b border-slate-200">
+                        <th className="py-2 px-3">Course</th>
+                        <th className="py-2 px-3">Faculty</th>
+                        <th className="py-2 px-3 text-center">Conducted</th>
+                        <th className="py-2 px-3 text-center">Attended</th>
+                        <th className="py-2 px-3 text-center">Absent</th>
+                        <th className="py-2 px-3 text-center">Percentage</th>
+                        <th className="py-2 px-3 text-center">Eligibility</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {effectiveAttendance.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="py-6 text-center text-slate-400">
+                            No attendance records have been logged in the database yet.
+                          </td>
+                        </tr>
+                      ) : (
+                        effectiveAttendance.map(att => {
+                          const isWarning = att.percentage < 75;
+                          return (
+                            <tr key={att.subjectCode} className="hover:bg-slate-50/50">
+                              <td className="py-2.5 px-3">
+                                <span className="font-mono font-bold bg-white px-1 py-0.5 rounded border border-slate-200 text-[10px] mr-1.5">
+                                  {att.subjectCode}
+                                </span>
+                                <span className="font-semibold text-slate-900">{att.subjectName}</span>
+                              </td>
+                              <td className="py-2.5 px-3 text-slate-600">{att.facultyName}</td>
+                              <td className="py-2.5 px-3 text-center font-bold text-slate-800">{att.totalClasses}</td>
+                              <td className="py-2.5 px-3 text-center font-bold text-emerald-700">{att.attendedClasses}</td>
+                              <td className="py-2.5 px-3 text-center font-bold text-red-600">
+                                {att.absentClasses !== undefined ? att.absentClasses : Math.max(0, att.totalClasses - att.attendedClasses)}
+                              </td>
+                              <td className="py-2.5 px-3 text-center font-bold font-mono">
+                                <span className={isWarning ? 'text-red-600' : 'text-emerald-700'}>
+                                  {att.percentage}%
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3 text-center">
+                                <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
+                                  isWarning
+                                    ? 'bg-red-50 text-red-700 border border-red-200'
+                                    : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                }`}>
+                                  {isWarning ? 'Shortage' : 'Compliant'}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Section 5: Faculty / HOD / Admin Professional Details */}
         {(isFacultyOrHod || isAdmin) && (
           <div className="bg-white rounded-lg border border-[#E2E8F0] shadow-2xs overflow-hidden">
             <div className="px-5 py-3.5 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
@@ -729,14 +1039,161 @@ export const ProfileModule: React.FC = () => {
                 </div>
               </div>
 
-              {/* Locked Department Information */}
-              <div className="p-3.5 bg-slate-50 rounded-lg border border-slate-200">
-                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1 flex items-center gap-1">
-                  <Lock className="w-3 h-3 text-slate-400" /> Affiliated Department & Teaching Load
-                </span>
-                <p className="text-slate-600 text-xs">
-                  Assigned Department: <strong className="text-slate-900">{currentUser.department} ({currentUser.departmentCode})</strong>. Course allocations, workload limits, and timetable scheduling are controlled by HOD & Academic Dean governance.
+              {/* Authoritative Academic Assignment & Database Relationship (Requirement 2 & 3) */}
+              <div className="p-4 bg-slate-50/80 rounded-lg border border-indigo-100 space-y-3.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-indigo-950 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                    <Building2 className="w-3.5 h-3.5 text-[#4F46E5]" />
+                    Authoritative Academic Assignment (Department, Subject, Year, Section)
+                  </span>
+                  <span className="text-[10px] bg-indigo-100 text-indigo-800 font-semibold px-2 py-0.5 rounded">
+                    Database Managed Relationship
+                  </span>
+                </div>
+
+                <p className="text-[11px] text-slate-500 leading-relaxed">
+                  Configuring this assignment links your Faculty account directly in Firestore. The <strong>Marks & Internal</strong> module strictly enforces this relationship to govern marks entry permissions.
                 </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {/* 1. Department */}
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Department
+                    </label>
+                    <select
+                      value={facultyDeptCode}
+                      disabled={!isEditing}
+                      onChange={e => {
+                        setFacultyDeptCode(e.target.value);
+                        setAssignedSubjectId('');
+                      }}
+                      className="w-full p-2 rounded-md border border-[#E2E8F0] bg-white text-slate-800 disabled:opacity-75 disabled:bg-slate-50 font-semibold text-xs"
+                    >
+                      {departments.length === 0 ? (
+                        <option value="EEE">EEE - Electrical & Electronics Engineering</option>
+                      ) : (
+                        departments.map(d => (
+                          <option key={d.id || d.code} value={d.code}>
+                            {d.code} - {d.name}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                  </div>
+
+                  {/* 2. Academic Year */}
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Assigned Year / Class
+                    </label>
+                    <select
+                      value={assignedYear}
+                      disabled={!isEditing}
+                      onChange={e => setAssignedYear(e.target.value)}
+                      className="w-full p-2 rounded-md border border-[#E2E8F0] bg-white text-slate-800 disabled:opacity-75 disabled:bg-slate-50 font-semibold text-xs"
+                    >
+                      <option value="1st Year">1st Year (Sem 1 & 2)</option>
+                      <option value="2nd Year">2nd Year (Sem 3 & 4)</option>
+                      <option value="3rd Year">3rd Year (Sem 5 & 6)</option>
+                      <option value="4th Year">4th Year (Sem 7 & 8)</option>
+                    </select>
+                  </div>
+
+                  {/* 3. Section */}
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Assigned Section
+                    </label>
+                    <select
+                      value={assignedSection}
+                      disabled={!isEditing}
+                      onChange={e => setAssignedSection(e.target.value)}
+                      className="w-full p-2 rounded-md border border-[#E2E8F0] bg-white text-slate-800 disabled:opacity-75 disabled:bg-slate-50 font-semibold text-xs"
+                    >
+                      <option value="Section A">Section A</option>
+                      <option value="Section B">Section B</option>
+                      <option value="Section C">Section C</option>
+                      <option value="Section D">Section D</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* 4. Subject Selection / Registration */}
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Assigned Course Subject
+                  </label>
+                  <select
+                    value={assignedSubjectId}
+                    disabled={!isEditing}
+                    onChange={e => setAssignedSubjectId(e.target.value)}
+                    className="w-full p-2 rounded-md border border-[#E2E8F0] bg-white text-slate-800 disabled:opacity-75 disabled:bg-slate-50 font-semibold text-xs"
+                  >
+                    <option value="">-- Select Course Subject from Database --</option>
+                    {subjects
+                      .filter(s => {
+                        const deptMatch = !facultyDeptCode ||
+                          (s.departmentCode && s.departmentCode.toLowerCase() === facultyDeptCode.toLowerCase()) ||
+                          (s.department && s.department.toLowerCase().includes(facultyDeptCode.toLowerCase()));
+                        return deptMatch || s.facultyId === currentUser.id;
+                      })
+                      .map(s => (
+                        <option key={s.id} value={s.id}>
+                          {s.code}: {s.name} {s.section ? `(${s.section})` : ''} {s.facultyId === currentUser.id ? '✓ (Currently Assigned to You)' : ''}
+                        </option>
+                      ))}
+                    <option value="NEW">+ Register & Assign New Subject to Profile...</option>
+                  </select>
+                </div>
+
+                {/* Optional Custom Subject Inputs if 'NEW' is chosen */}
+                {isEditing && assignedSubjectId === 'NEW' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 bg-white rounded-md border border-indigo-200">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-700 uppercase mb-1">
+                        New Subject Name *
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. DC Machine"
+                        value={customSubjectName}
+                        onChange={e => setCustomSubjectName(e.target.value)}
+                        className="w-full p-2 text-xs rounded border border-slate-300 font-medium"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-700 uppercase mb-1">
+                        Subject Code (Optional)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. EE201"
+                        value={customSubjectCode}
+                        onChange={e => setCustomSubjectCode(e.target.value)}
+                        className="w-full p-2 text-xs rounded border border-slate-300 font-mono font-medium"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Active Relationship Badge */}
+                <div className="p-2.5 bg-white rounded border border-slate-200 text-[11px] text-slate-700 flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-semibold text-slate-500">Active Live Relationship:</span>
+                    <strong className="text-[#0F172A]">
+                      Faculty → {facultyDeptCode} → {
+                        assignedSubjectId === 'NEW'
+                          ? (customSubjectName || 'New Subject')
+                          : (subjects.find(s => s.id === assignedSubjectId)?.name || currentUser.assignedSubjectName || 'None Assigned')
+                      } → {assignedYear} → {assignedSection}
+                    </strong>
+                  </div>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">
+                    Active in Marks & Internal
+                  </span>
+                </div>
               </div>
             </div>
           </div>

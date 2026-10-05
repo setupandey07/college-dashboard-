@@ -1,10 +1,60 @@
 @import "tailwindcss";
 
 @layer base {
+  :root {
+    /* Primary Academic Mint Theme Palette */
+    --color-mint-50: #F2F9F5;
+    --color-mint-100: #E3F3EA;
+    --color-mint-200: #CEE7D8;
+    --color-mint-300: #9ECFB2;
+    --color-mint-400: #62B286;
+    --color-mint-500: #2E9462;
+    --color-mint-600: #1B8B67;
+    --color-mint-700: #167557;
+    --color-mint-800: #125E46;
+    --color-mint-900: #0E4937;
+    --color-mint-950: #082D22;
+
+    /* Surfaces & Layout Backgrounds */
+    --bg-app: #F4F8F5;
+    --bg-sidebar: #EBF3EE;
+    --bg-card: #FFFFFF;
+    --bg-card-hover: #F9FCFA;
+
+    /* Borders */
+    --border-theme: #E2ECE6;
+    --border-theme-hover: #CCE0D4;
+    --border-mint: #CEE7D8;
+
+    /* Typography */
+    --text-primary: #14382C;
+    --text-secondary: #4D6D61;
+    --text-muted: #78988C;
+    --text-light: #9BB7AB;
+
+    /* Sidebar States */
+    --sidebar-active-bg: #CEE7D8;
+    --sidebar-active-text: #124838;
+    --sidebar-text: #3D5F52;
+    --sidebar-hover-bg: #E1EDE5;
+
+    /* Semantic Accents */
+    --status-success-bg: #E8F7EE;
+    --status-success-text: #15803D;
+    --status-warning-bg: #FEF3C7;
+    --status-warning-text: #B45309;
+    --status-danger-bg: #FEE2E2;
+    --status-danger-text: #B91C1C;
+    --status-info-bg: #E0F2FE;
+    --status-info-text: #0369A1;
+  }
+
   body {
     font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
-    color: #1e293b;
-    background-color: #f8fafc;
+    color: var(--text-primary);
+    background-color: var(--bg-app);
+    -webkit-font-smoothing: antialiased;
+    letter-spacing: -0.01em;
   }
   
   code, pre {
@@ -12,21 +62,87 @@
   }
 }
 
-/* Custom scrollbars */
+/* Academic SaaS Custom Utilities */
+.bg-app {
+  background-color: #F4F8F5;
+}
+
+.bg-sidebar {
+  background-color: #EBF3EE;
+}
+
+.text-theme-dark {
+  color: #14382C;
+}
+
+.text-theme-muted {
+  color: #4D6D61;
+}
+
+.border-theme {
+  border-color: #E2ECE6;
+}
+
+.border-theme-hover:hover {
+  border-color: #CCE0D4;
+}
+
+.btn-primary-mint {
+  background: linear-gradient(135deg, #1B8B67 0%, #167557 100%);
+  color: #FFFFFF;
+  font-weight: 600;
+  border-radius: 0.5rem;
+  transition: all 0.15s ease-in-out;
+  box-shadow: 0 1px 2px 0 rgba(22, 117, 87, 0.2);
+}
+
+.btn-primary-mint:hover {
+  background: linear-gradient(135deg, #167557 0%, #125E46 100%);
+  box-shadow: 0 2px 4px 0 rgba(22, 117, 87, 0.3);
+}
+
+.btn-secondary-mint {
+  background-color: #FFFFFF;
+  color: #14382C;
+  border: 1px solid #E2ECE6;
+  font-weight: 600;
+  border-radius: 0.5rem;
+  transition: all 0.15s ease-in-out;
+}
+
+.btn-secondary-mint:hover {
+  background-color: #F4F8F5;
+  border-color: #CCE0D4;
+}
+
+.card-academic {
+  background-color: #FFFFFF;
+  border: 1px solid #E2ECE6;
+  border-radius: 0.875rem;
+  box-shadow: 0 1px 3px 0 rgba(20, 56, 44, 0.03);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.card-academic:hover {
+  border-color: #CDE0D5;
+  box-shadow: 0 4px 12px 0 rgba(20, 56, 44, 0.05);
+}
+
+/* Custom Scrollbars in Soft Sage */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #f1f5f9;
+  background: #EBF3EE;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: #C4D9CD;
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: #9EC0B0;
 }

@@ -473,43 +473,70 @@ export async function seedFirestoreDatabase(force = false): Promise<{ success: b
   try {
     const seedMetaRef = doc(db, 'system', 'seed_status');
 
-    // Always ensure all demo data is thoroughly purged from Firestore
-    await purgeAllDemoData();
-
     try {
       const seedMetaSnap = await getDoc(seedMetaRef);
       if (seedMetaSnap.exists() && !force) {
-        console.log('Firestore is already seeded. Demo items purged.');
-        return { success: true, message: 'Database verified with zero demo data' };
+        // Non-blocking sync for any newly added foundational departments or subjects
+        Promise.all([
+          ...INITIAL_DEPARTMENTS.map(async (dept) => {
+            try {
+              const ref = doc(db, 'departments', dept.id);
+              const snap = await getDoc(ref);
+              if (!snap.exists()) {
+                await setDoc(ref, { ...dept, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+              }
+            } catch (_) {}
+          }),
+          ...INITIAL_SUBJECTS.map(async (sub) => {
+            try {
+              const ref = doc(db, 'subjects', sub.id);
+              const snap = await getDoc(ref);
+              if (!snap.exists()) {
+                await setDoc(ref, { ...sub, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+              }
+            } catch (_) {}
+          })
+        ]).catch(() => {});
+
+        return { success: true, message: 'Database already verified and seeded' };
       }
     } catch (checkError) {
       const checkMsg = checkError instanceof Error ? checkError.message : String(checkError);
-      if (checkMsg.includes('offline') || checkMsg.includes('unavailable')) {
-        console.warn('Firestore client currently offline or initializing. Deferring seed verification.');
-        return { success: true, message: 'Firestore offline/initializing' };
+      if (checkMsg.includes('offline') || checkMsg.includes('unavailable') || checkMsg.includes('permission')) {
+        return { success: true, message: 'Firestore offline/initializing or restricted' };
       }
       throw checkError;
     }
 
-    console.log('Initializing foundational departments & subjects...');
+    // Only if unseeded or forced, purge legacy demo items and seed foundational data
+    console.log('[Firestore Seed] Initializing foundational academic catalog...');
+    await purgeAllDemoData();
 
-    // 1. Seed Departments (Foundational academic schema only)
-    for (const dept of INITIAL_DEPARTMENTS) {
-      const ref = doc(db, 'departments', dept.id);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) {
-        await setDoc(ref, { ...dept, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
-      }
-    }
+    // 1. Seed Departments in parallel
+    await Promise.all(
+      INITIAL_DEPARTMENTS.map(async (dept) => {
+        try {
+          const ref = doc(db, 'departments', dept.id);
+          const snap = await getDoc(ref);
+          if (!snap.exists()) {
+            await setDoc(ref, { ...dept, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+          }
+        } catch (_) {}
+      })
+    );
 
-    // 2. Seed Subjects (Foundational syllabus curriculum only)
-    for (const sub of INITIAL_SUBJECTS) {
-      const ref = doc(db, 'subjects', sub.id);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) {
-        await setDoc(ref, { ...sub, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
-      }
-    }
+    // 2. Seed Subjects in parallel
+    await Promise.all(
+      INITIAL_SUBJECTS.map(async (sub) => {
+        try {
+          const ref = doc(db, 'subjects', sub.id);
+          const snap = await getDoc(ref);
+          if (!snap.exists()) {
+            await setDoc(ref, { ...sub, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+          }
+        } catch (_) {}
+      })
+    );
 
     // Mark system seed complete
     await setDoc(seedMetaRef, {

@@ -46,8 +46,47 @@ export const SyllabusModule: React.FC<SyllabusModuleProps> = ({ initialSubjectId
   const isAdmin = currentRole === 'admin';
   const isHod = currentRole === 'hod';
   const isFaculty = currentRole === 'faculty';
+  const isLabAssistant = currentRole === 'lab_assistant';
   const canManageSubjects = isAdmin || isHod;
-  const canEditCoverage = isAdmin || isHod || isFaculty;
+
+  const facultyAssignedIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    if (Array.isArray(currentUser?.assignedSubjectIds)) {
+      currentUser.assignedSubjectIds.forEach(id => ids.add(id));
+    }
+    if (currentUser?.assignedSubjectId) {
+      ids.add(currentUser.assignedSubjectId);
+    }
+    return ids;
+  }, [currentUser]);
+
+  // Authoritative subjects accessible to the current role (Strict Role & Department Isolation)
+  const accessibleSubjects = React.useMemo(() => {
+    if (isAdmin) {
+      return subjects;
+    }
+    if (isHod) {
+      const hodDeptCode = (currentUser?.departmentCode || '').toUpperCase().trim();
+      const hodDeptName = (currentUser?.department || '').toLowerCase().trim();
+      return subjects.filter(s => {
+        const subDeptCode = (s.departmentCode || '').toUpperCase().trim();
+        const subDeptName = (s.department || '').toLowerCase().trim();
+        return (hodDeptCode && subDeptCode === hodDeptCode) || (hodDeptName && (subDeptName === hodDeptName || subDeptName.includes(hodDeptName)));
+      });
+    }
+    if (isFaculty || isLabAssistant) {
+      const userDeptCode = (currentUser?.departmentCode || '').toUpperCase().trim();
+      const userDeptName = (currentUser?.department || '').toLowerCase().trim();
+      return subjects.filter(s => {
+        const isAssigned = facultyAssignedIds.has(s.id) || facultyAssignedIds.has(s.code) || s.facultyId === currentUser?.id;
+        const subDeptCode = (s.departmentCode || '').toUpperCase().trim();
+        const subDeptName = (s.department || '').toLowerCase().trim();
+        const isDeptMatch = !userDeptCode || subDeptCode === userDeptCode || subDeptName === userDeptName;
+        return isAssigned && isDeptMatch;
+      });
+    }
+    return subjects;
+  }, [subjects, isAdmin, isHod, isFaculty, isLabAssistant, currentUser, facultyAssignedIds]);
 
   // Filter States
   const [filterDept, setFilterDept] = useState<string>(initialDept || 'all');
@@ -115,8 +154,8 @@ export const SyllabusModule: React.FC<SyllabusModuleProps> = ({ initialSubjectId
     setTimeout(() => setNotification(null), 4000);
   };
 
-  // Filter matching subjects dynamically
-  const matchingSubjects = subjects.filter(sub => {
+  // Filter matching subjects dynamically from authoritative accessible subjects
+  const matchingSubjects = accessibleSubjects.filter(sub => {
     const matchDept = filterDept === 'all' ||
       sub.department.toLowerCase().trim() === filterDept.toLowerCase().trim() ||
       departments.find(d => d.code === filterDept)?.name.toLowerCase().trim() === sub.department.toLowerCase().trim();
@@ -146,9 +185,34 @@ export const SyllabusModule: React.FC<SyllabusModuleProps> = ({ initialSubjectId
     } else {
       setSelectedSubjectId(null);
     }
-  }, [subjects, filterDept, filterYear, filterSem, filterSection, searchQuery]);
+  }, [accessibleSubjects, filterDept, filterYear, filterSem, filterSection, searchQuery]);
 
   const activeSubject = subjects.find(s => s.id === selectedSubjectId) || matchingSubjects[0] || null;
+
+  // Authoritative check if activeSubject is authorized for the current user
+  const isSubjectAuthorized = React.useMemo(() => {
+    if (!activeSubject) return false;
+    if (isAdmin) return true;
+    if (isHod) {
+      const hodDeptCode = (currentUser?.departmentCode || '').toUpperCase().trim();
+      const hodDeptName = (currentUser?.department || '').toLowerCase().trim();
+      const subDeptCode = (activeSubject.departmentCode || '').toUpperCase().trim();
+      const subDeptName = (activeSubject.department || '').toLowerCase().trim();
+      return (hodDeptCode && subDeptCode === hodDeptCode) || (hodDeptName && (subDeptName === hodDeptName || subDeptName.includes(hodDeptName)));
+    }
+    if (isFaculty || isLabAssistant) {
+      const userDeptCode = (currentUser?.departmentCode || '').toUpperCase().trim();
+      const userDeptName = (currentUser?.department || '').toLowerCase().trim();
+      const subDeptCode = (activeSubject.departmentCode || '').toUpperCase().trim();
+      const subDeptName = (activeSubject.department || '').toLowerCase().trim();
+      const isDeptMatch = !userDeptCode || subDeptCode === userDeptCode || subDeptName === userDeptName;
+      const isAssigned = facultyAssignedIds.has(activeSubject.id) || facultyAssignedIds.has(activeSubject.code) || activeSubject.facultyId === currentUser?.id;
+      return isDeptMatch && isAssigned;
+    }
+    return true;
+  }, [activeSubject, isAdmin, isHod, isFaculty, isLabAssistant, currentUser, facultyAssignedIds]);
+
+  const canEditCoverage = (isAdmin || isHod || isFaculty || isLabAssistant) && isSubjectAuthorized;
 
   // Compute coverage metrics dynamically from actual topics
   const computeSubjectMetrics = (sub: Subject | null) => {
@@ -615,17 +679,19 @@ export const SyllabusModule: React.FC<SyllabusModuleProps> = ({ initialSubjectId
       </div>
 
       {/* Main View: Empty State or Subject Selector & Syllabus Builder */}
-      {subjects.length === 0 ? (
-        /* Empty State: 0 Total Subjects in System */
+      {accessibleSubjects.length === 0 ? (
+        /* Empty State: 0 Accessible Subjects for Current Role */
         <div className="bg-white rounded-lg border border-[#E2E8F0] p-10 sm:p-14 text-center shadow-xs">
-          <div className="w-16 h-16 mx-auto rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mb-4">
-            <BookOpenCheck className="w-8 h-8 text-slate-400" />
+          <div className="w-16 h-16 mx-auto rounded-full bg-amber-50 text-amber-600 flex items-center justify-center mb-4">
+            <BookOpen className="w-8 h-8 text-amber-600" />
           </div>
           <h2 className="text-base font-bold text-[#0F172A] mb-1">
-            0 Course Subjects Created
+            {isFaculty || isLabAssistant ? 'No Subjects Currently Assigned' : '0 Course Subjects Created'}
           </h2>
           <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed mb-5">
-            The institutional curriculum directory has no registered course subjects. Establish real academic subjects (such as DC Machines, Operating Systems, or Control Systems) to define unit topics and track coverage.
+            {isFaculty || isLabAssistant
+              ? `You currently do not have any assigned courses in ${currentUser?.departmentCode || 'your department'}. Please contact your Head of Department or Institutional Administrator to allocate your subjects.`
+              : 'The institutional curriculum directory has no registered course subjects. Establish real academic subjects to define unit topics and track coverage.'}
           </p>
           {canManageSubjects && (
             <button
@@ -661,6 +727,18 @@ export const SyllabusModule: React.FC<SyllabusModuleProps> = ({ initialSubjectId
       ) : (
         /* Active View: Subject Selector Tabs & Full Syllabus Builder */
         <div className="space-y-5">
+          {!isSubjectAuthorized && activeSubject && (
+            <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-900 text-xs flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+              <div>
+                <h3 className="font-bold text-red-950 text-sm">Subject Access Restricted</h3>
+                <p className="mt-1 text-red-800 leading-relaxed">
+                  You are not assigned to manage course &apos;{activeSubject.name}&apos; ({activeSubject.code}). Under institutional security policies, faculty and lab assistants can only view, edit, and track syllabus coverage for their explicitly assigned subjects.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Subject Navigation Tabs */}
           <div className="flex overflow-x-auto gap-2 pb-1.5 border-b border-[#E2E8F0]">
             {matchingSubjects.map(sub => {

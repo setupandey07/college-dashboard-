@@ -7,6 +7,7 @@ import { RoleSwitcherBanner } from './components/common/RoleSwitcherBanner';
 import { FirebaseRulesBanner } from './components/common/FirebaseRulesBanner';
 import { LoginPage } from './components/auth/LoginPage';
 import { VerifyingScreen } from './components/auth/VerifyingScreen';
+import { CompleteProfilePage } from './components/auth/CompleteProfilePage';
 import { UserRole } from './types';
 
 // Dashboards
@@ -28,11 +29,12 @@ import { InnovationHubModule } from './components/modules/InnovationHubModule';
 import { ReportsModule } from './components/modules/ReportsModule';
 import { AnnouncementsModule } from './components/modules/AnnouncementsModule';
 import { LabOperationsModule } from './components/modules/LabOperationsModule';
+import { MasterNotesModule } from './components/modules/MasterNotesModule';
 import { ProfileModule } from './components/modules/ProfileModule';
 import { GeminiAssistantModal } from './components/modules/GeminiAssistantModal';
 
 const AppContent: React.FC = () => {
-  const { authState, currentRole, actualRole } = useAuth();
+  const { authState, currentRole, actualRole, currentUser } = useAuth();
   const [currentTab, setCurrentTab] = useState<NavTab>('dashboard');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isAiModalOpen, setIsAiModalOpen] = useState(false);
@@ -78,11 +80,11 @@ const AppContent: React.FC = () => {
   // Tab permissions validation when role changes (e.g. Admin visiting Student view)
   useEffect(() => {
     const roleAllowedTabs: Record<UserRole, NavTab[]> = {
-      admin: ['dashboard', 'marks', 'syllabus', 'workload', 'departments', 'users', 'queries', 'innovation', 'reports', 'announcements', 'lab_ops', 'profile'],
-      hod: ['dashboard', 'attendance', 'marks', 'syllabus', 'workload', 'departments', 'users', 'queries', 'innovation', 'reports', 'announcements', 'lab_ops', 'profile'],
-      faculty: ['dashboard', 'attendance', 'marks', 'syllabus', 'workload', 'queries', 'innovation', 'reports', 'announcements', 'lab_ops', 'profile'],
-      lab_assistant: ['dashboard', 'attendance', 'marks', 'syllabus', 'lab_ops', 'queries', 'innovation', 'announcements', 'profile'],
-      student: ['dashboard', 'attendance', 'marks', 'syllabus', 'queries', 'innovation', 'announcements', 'profile']
+      admin: ['dashboard', 'marks', 'notes', 'syllabus', 'workload', 'departments', 'users', 'queries', 'innovation', 'reports', 'announcements', 'lab_ops', 'profile'],
+      hod: ['dashboard', 'attendance', 'marks', 'notes', 'syllabus', 'workload', 'departments', 'users', 'queries', 'innovation', 'reports', 'announcements', 'lab_ops', 'profile'],
+      faculty: ['dashboard', 'attendance', 'marks', 'notes', 'syllabus', 'workload', 'queries', 'innovation', 'reports', 'announcements', 'lab_ops', 'profile'],
+      lab_assistant: ['dashboard', 'attendance', 'marks', 'notes', 'syllabus', 'lab_ops', 'queries', 'innovation', 'announcements', 'profile'],
+      student: ['dashboard', 'attendance', 'marks', 'notes', 'syllabus', 'queries', 'innovation', 'announcements', 'profile']
     };
 
     const allowed = roleAllowedTabs[currentRole] || [];
@@ -112,6 +114,20 @@ const AppContent: React.FC = () => {
 
   if (authState === 'UNAUTHENTICATED' || authState === 'ACCESS_DENIED') {
     return <LoginPage />;
+  }
+
+  // 2.5 First-Time Profile Completion & Subject Onboarding Gate
+  // Incomplete profiles or faculty/lab assistants without completed initial subject onboarding are gated
+  const isFacultyOrLab =
+    actualRole === 'faculty' ||
+    actualRole === 'lab_assistant' ||
+    currentUser?.role === 'faculty' ||
+    currentUser?.role === 'lab_assistant';
+
+  const needsSubjectOnboarding = Boolean(isFacultyOrLab && !currentUser?.hasCompletedSubjectOnboarding);
+
+  if (currentUser && actualRole !== 'admin' && (currentUser.isProfileComplete === false || needsSubjectOnboarding)) {
+    return <CompleteProfilePage />;
   }
 
   // 3. Authorized View: Render role-specific dashboard when tab is 'dashboard'
@@ -151,6 +167,8 @@ const AppContent: React.FC = () => {
         return <AttendanceModule />;
       case 'marks':
         return <MarksModule />;
+      case 'notes':
+        return <MasterNotesModule />;
       case 'syllabus':
         return (
           <SyllabusModule
@@ -189,8 +207,8 @@ const AppContent: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] flex text-slate-800">
-      {/* Deep Navy Institutional Sidebar */}
+    <div className="min-h-screen bg-[#F4F8F5] flex text-[#14382C]">
+      {/* Light Mint-Sage Institutional Sidebar */}
       <Sidebar
         currentTab={currentTab}
         onSelectTab={setCurrentTab}
@@ -212,7 +230,7 @@ const AppContent: React.FC = () => {
         />
 
         {/* Dynamic Page Content */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
+        <main className="flex-1 p-4 sm:p-6 lg:p-7 max-w-7xl w-full mx-auto">
           <FirebaseRulesBanner />
           {renderContent()}
         </main>

@@ -378,17 +378,17 @@ export const DepartmentsModule: React.FC<DepartmentsModuleProps> = ({ onNavigate
         </div>
       )}
 
-      {/* Header Banner */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-lg border border-[#E2E8F0] shadow-2xs">
+      {/* Header Banner matching SaaS styling */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-[#D9E6DE] shadow-xs">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-indigo-50 text-[#4F46E5] border border-indigo-200 flex items-center justify-center shrink-0">
-            <Building2 className="w-5 h-5 text-[#4F46E5]" />
+          <div className="w-10 h-10 rounded-xl bg-[#1B8B67] text-white flex items-center justify-center shrink-0 shadow-xs">
+            <Building2 className="w-5 h-5 text-white" />
           </div>
           <div>
-            <h1 className="text-base sm:text-lg font-bold text-[#0F172A]">
+            <h1 className="text-base sm:text-lg font-bold text-[#14382C]">
               Academic Departments & Class Structure
             </h1>
-            <p className="text-xs text-slate-500 mt-0.5">
+            <p className="text-xs text-[#527568] mt-0.5">
               Manage engineering departments, HOD assignments, academic years, semesters, and class sections
             </p>
           </div>
@@ -397,10 +397,10 @@ export const DepartmentsModule: React.FC<DepartmentsModuleProps> = ({ onNavigate
         {isAdmin && (
           <button
             onClick={openCreateDeptModal}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-md bg-[#0F172A] hover:bg-slate-800 text-white font-semibold text-xs shadow-xs transition-all active:scale-95 cursor-pointer self-start sm:self-auto"
+            className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#1B8B67] hover:bg-[#167557] text-white font-bold text-xs shadow-xs transition-all active:scale-95 cursor-pointer self-start sm:self-auto"
           >
-            <Plus className="w-4 h-4 text-amber-400" />
-            Add Department
+            <Plus className="w-4 h-4 text-emerald-100" />
+            <span>Add Department</span>
           </button>
         )}
       </div>

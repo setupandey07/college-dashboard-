@@ -8,12 +8,26 @@ import {
   Sparkles,
   MessageSquare,
   ArrowUpRight,
-  Plus,
-  ShieldCheck
+  ChevronRight,
+  Users,
+  ShieldCheck,
+  Calendar,
+  Send,
+  ArrowRight,
+  TrendingUp,
+  FileText
 } from 'lucide-react';
 import { useAcademicData } from '../../context/AcademicDataContext';
 import { useAuth } from '../../context/AuthContext';
 import { NavTab } from '../layout/Sidebar';
+import { filterQueriesForUser } from '../../lib/queryPrivacy';
+import { TimetableDay, DEFAULT_TIMETABLE_SLOTS } from '../../services/firestore';
+import {
+  CampusHeroIllustration,
+  SmartTechBooksIllustration,
+  AcademicExcellenceIllustration
+} from '../common/AcademicIllustrations';
+import { MetricValueSkeleton } from '../common/LoadingSkeleton';
 
 interface FacultyDashboardProps {
   onNavigate: (tab: NavTab) => void;
@@ -25,33 +39,52 @@ export const FacultyDashboard: React.FC<FacultyDashboardProps> = ({
   onOpenAiAssistant
 }) => {
   const { currentUser, actualRole, isSimulatingRole } = useAuth();
-  const { subjects, queries, attendanceSessions } = useAcademicData();
+  const {
+    subjects,
+    queries,
+    attendanceSessions,
+    announcements,
+    timetables,
+    loadingState,
+    errorState
+  } = useAcademicData();
 
   const isRealFaculty = actualRole === 'faculty';
 
-  // Strict User Isolation: Filter subjects assigned to current user, or allow curriculum preview for admin
-  const mySubjects = isRealFaculty
-    ? subjects.filter(
-        s => s.facultyId === currentUser.id ||
-             (s.facultyName && currentUser.name && (
-               s.facultyName.toLowerCase().includes(currentUser.name.toLowerCase()) ||
-               currentUser.name.toLowerCase().includes(s.facultyName.toLowerCase())
-             ))
-      )
-    : [];
+  // Strict User Isolation: Filter subjects assigned to current user with strict department isolation
+  const userAssignedIds = currentUser.assignedSubjectIds || (currentUser.assignedSubjectId ? [currentUser.assignedSubjectId] : []);
+  const userDeptCode = (currentUser.departmentCode || '').toUpperCase();
+  const userDeptName = (currentUser.department || '').toLowerCase();
 
-  const activeSubjects = mySubjects.length > 0 ? mySubjects : (isSimulatingRole ? subjects.slice(0, 4) : []);
+  const mySubjects = subjects.filter(s => {
+    // 1. Department isolation
+    if (userDeptCode && s.departmentCode && s.departmentCode.toUpperCase() !== userDeptCode) {
+      return false;
+    }
+    if (userDeptName && s.department && s.department.toLowerCase() !== userDeptName && !s.departmentCode) {
+      return false;
+    }
 
-  const myQueries = isRealFaculty
-    ? queries.filter(
-        q => (q.assignedTo && currentUser.name && (
-               q.assignedTo.toLowerCase().includes(currentUser.name.toLowerCase()) ||
-               currentUser.name.toLowerCase().includes(q.assignedTo.toLowerCase())
-             )) ||
-             q.category === 'academic'
-      )
-    : (isSimulatingRole ? queries.filter(q => q.category === 'academic') : []);
+    // 2. Explicit assigned IDs
+    if (userAssignedIds.length > 0) {
+      return userAssignedIds.includes(s.id);
+    }
 
+    // 3. Fallback to facultyId or facultyName match only if assignedSubjectIds not defined
+    if (s.facultyId === currentUser.id) return true;
+    if (s.facultyName && currentUser.name && (
+      s.facultyName.toLowerCase().includes(currentUser.name.toLowerCase()) ||
+      currentUser.name.toLowerCase().includes(s.facultyName.toLowerCase())
+    )) {
+      return true;
+    }
+
+    return false;
+  });
+
+  const activeSubjects = mySubjects;
+
+  const myQueries = filterQueriesForUser(queries, currentUser, 'faculty');
   const pendingQueriesCount = myQueries.filter(q => q.status !== 'resolved').length;
 
   const theoryCount = activeSubjects.filter(s => s.type === 'theory').length;
@@ -63,16 +96,59 @@ export const FacultyDashboard: React.FC<FacultyDashboardProps> = ({
     0
   );
 
-  // Dynamic teaching schedule derived strictly from real Firestore subjects
-  const todaySchedule = activeSubjects.slice(0, 3).map((sub, idx) => ({
-    id: `sc-${sub.id}`,
-    subjectCode: sub.code,
-    subjectName: sub.name,
-    slot: idx === 0 ? '09:00 AM - 10:00 AM' : idx === 1 ? '11:15 AM - 12:15 PM' : '01:30 PM - 03:30 PM',
-    room: sub.type === 'lab' ? 'Computing Lab' : `Lecture Hall ${sub.semester}01`,
-    section: `${sub.semester}th Sem - Section A`,
-    status: idx === 0 ? ('conducted' as const) : ('upcoming' as const)
-  }));
+  // Canonical Database Timetable Integration: Synchronize strictly with Firestore timetables
+  const dayNames: TimetableDay[] = ['Monday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Monday'];
+  const todayDayIndex = new Date().getDay();
+  const currentWeekDay: TimetableDay = dayNames[todayDayIndex] || 'Monday';
+
+  const databaseSlots: {
+    id: string;
+    subjectCode: string;
+    subjectName: string;
+    slot: string;
+    room: string;
+    section: string;
+    status: 'conducted' | 'upcoming';
+  }[] = [];
+
+  timetables.forEach((tt) => {
+    const daySchedule = tt.schedule?.[currentWeekDay];
+    if (!daySchedule) return;
+
+    Object.entries(daySchedule).forEach(([slotId, cell]) => {
+      if (!cell) return;
+
+      const isMyCell =
+        (cell.facultyId && cell.facultyId === currentUser.id) ||
+        (cell.facultyName && currentUser.name && cell.facultyName.toLowerCase() === currentUser.name.toLowerCase()) ||
+        activeSubjects.some(s => s.id === cell.subjectId || s.code === cell.subjectCode);
+
+      if (isMyCell) {
+        const slotConfig = (tt.slotsConfig || DEFAULT_TIMETABLE_SLOTS).find(s => s.id === slotId);
+        const timeLabel = slotConfig ? `${slotConfig.timeRange} (${slotConfig.label})` : slotId;
+
+        // Check if attendance session was already recorded for this subject today
+        const todayDateStr = new Date().toISOString().split('T')[0];
+        const isConducted = attendanceSessions.some(
+          sess =>
+            (sess.subjectId === cell.subjectId || sess.subjectCode === cell.subjectCode) &&
+            sess.date === todayDateStr
+        );
+
+        databaseSlots.push({
+          id: `tt-${tt.sectionId}-${slotId}`,
+          subjectCode: cell.subjectCode,
+          subjectName: cell.subjectName,
+          slot: timeLabel,
+          room: cell.roomNumber || cell.room || 'Lecture Hall',
+          section: `${tt.departmentCode} Yr ${tt.academicYear} - Sec ${tt.sectionName}`,
+          status: isConducted ? 'conducted' : 'upcoming'
+        });
+      }
+    });
+  });
+
+  const todaySchedule = databaseSlots;
 
   // Average attendance from real sessions
   const facultySessions = attendanceSessions.filter(
@@ -84,302 +160,465 @@ export const FacultyDashboard: React.FC<FacultyDashboardProps> = ({
       )
     : 0;
 
+  // Faculty circulars
+  const facultyAnnouncements = announcements.filter(
+    a => a.targetAudience === 'all' || a.targetAudience === 'faculty'
+  );
+
+  const getTimeGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Good Morning';
+    if (hour < 17) return 'Good Afternoon';
+    return 'Good Evening';
+  };
+
+  const userDisplayName = currentUser?.name ? currentUser.name.split(' ')[0] : 'Professor';
+
   return (
     <div className="space-y-6">
       {/* Role Preview Banner for Administrator Testing */}
       {isSimulatingRole && (
-        <div className="bg-amber-50 border border-amber-300 rounded-lg p-4 text-xs animate-in fade-in">
-          <div className="flex items-center gap-2 text-amber-900 font-bold mb-1">
-            <ShieldCheck className="w-4 h-4 text-amber-600 shrink-0" />
-            <span>Role Simulation Mode — Faculty Portal Interface</span>
+        <div className="bg-[#FEF3C7] border border-[#F59E0B]/40 rounded-2xl p-4 text-xs animate-in fade-in flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2.5 text-[#92400E]">
+            <ShieldCheck className="w-5 h-5 text-[#D97706] shrink-0" />
+            <div>
+              <p className="font-bold">Role Simulation Mode — Faculty Teaching Workspace</p>
+              <p className="text-[11px] text-[#B45309]">
+                Previewing teaching dashboard and evaluations as Administrator ({currentUser.name}).
+              </p>
+            </div>
           </div>
-          <p className="text-slate-700 leading-relaxed">
-            You are previewing the Faculty teaching workbench and evaluation tools as Administrator (<strong className="text-slate-900">{currentUser.name}</strong>).
-            Faculty appointments and individual course assignments remain strictly isolated to verified faculty accounts.
-          </p>
-          <div className="mt-2.5 flex items-center gap-2">
-            <span className="text-[11px] text-amber-800 font-medium">To manage faculty appointments:</span>
-            <button
-              onClick={() => onNavigate('users')}
-              className="px-2.5 py-1 rounded bg-[#0F172A] hover:bg-slate-800 text-white font-semibold text-[11px] transition-colors cursor-pointer"
-            >
-              Open Users & Students Directory
-            </button>
-          </div>
+          <button
+            onClick={() => onNavigate('users')}
+            className="px-3 py-1.5 rounded-xl bg-[#0E2920] text-white font-bold text-xs hover:bg-[#14382C] shrink-0 transition-colors"
+          >
+            Manage Faculty Accounts
+          </button>
         </div>
       )}
 
-      {/* Official Faculty Banner */}
-      <div className="bg-white rounded-lg p-5 sm:p-6 border border-[#E2E8F0]">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-              <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-                Faculty Academic Terminal
-              </span>
-              <span className="text-slate-300">·</span>
-              <span className="text-xs text-slate-500">{currentUser.department || 'Academic Department'}</span>
-              {isSimulatingRole && (
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 uppercase">
-                  Testing Simulation
-                </span>
+      {/* 1. Official Faculty Teaching Banner */}
+      <div className="bg-gradient-to-r from-[#EBF5EF] via-[#EDF6F1] to-[#E5F2EA] border border-[#DCEBE2] rounded-2xl p-6 sm:p-7 relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-6 shadow-xs">
+        <div className="z-10 max-w-xl">
+          <div className="flex items-center gap-3">
+            <span className="text-3xl animate-bounce">👋</span>
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-[#14382C] tracking-tight">
+              {getTimeGreeting()}, {userDisplayName}
+            </h1>
+          </div>
+          <div className="flex items-center gap-2 mt-2 flex-wrap">
+            <span className="text-xs font-bold text-[#1B8B67] bg-[#E0F3E8] px-2.5 py-0.5 rounded-full border border-[#C6E4D2]">
+              {currentUser.department || 'Engineering Faculty'}
+            </span>
+            <span className="text-xs text-[#527568] font-medium">•</span>
+            <span className="text-xs text-[#527568] font-medium">Teaching & Evaluation Workbench</span>
+          </div>
+          <p className="text-[#4D6D61] text-xs sm:text-sm mt-1.5 font-medium leading-relaxed">
+            {isRealFaculty ? (
+              <>
+                {currentUser.name} ({currentUser.designation || 'Faculty'}) • {totalContactHours} Contact Hours/Week • {activeSubjects.length} Allocated Course Module{activeSubjects.length === 1 ? '' : 's'}.
+              </>
+            ) : (
+              <>
+                Curriculum preview with {activeSubjects.length} courses allocated. Conduct attendance and grade CIA assessments seamlessly.
+              </>
+            )}
+          </p>
+        </div>
+
+        {/* Right Tagline & Illustration */}
+        <div className="relative flex items-center justify-end gap-6 shrink-0 z-10">
+          <div className="hidden lg:block text-right">
+            <span className="font-serif italic text-lg text-[#2E7D60] font-bold block leading-none">
+              Teach
+            </span>
+            <span className="font-serif italic text-xl text-[#1E5D47] font-extrabold block leading-tight">
+              Inspire
+            </span>
+            <span className="font-serif italic text-2xl text-[#164837] font-black block leading-none">
+              Elevate
+            </span>
+          </div>
+          <div className="w-44 sm:w-56 h-28 sm:h-32 flex items-center justify-center">
+            <CampusHeroIllustration className="w-full h-full object-contain drop-shadow-sm" />
+          </div>
+        </div>
+      </div>
+
+      {/* 2. Top Metric Cards Row (4 cards matching Admin quality) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        {/* Card 1: Allocated Courses */}
+        <div
+          onClick={() => onNavigate('syllabus')}
+          className="bg-white rounded-2xl p-5 border border-[#D9E6DE] hover:border-[#1B8B67] hover:shadow-md transition-all cursor-pointer group flex items-center justify-between"
+        >
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-[#E0F2FE] text-[#0284C7] flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <BookOpenCheck className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-[#527568]">Allocated Courses</p>
+              <MetricValueSkeleton
+                isLoading={loadingState.subjects}
+                error={errorState.subjects}
+                value={activeSubjects.length}
+              />
+              <p className="text-[11px] font-medium text-[#719184] mt-1">
+                {theoryCount} Theory + {labCount} Lab
+              </p>
+            </div>
+          </div>
+          <ChevronRight className="w-4 h-4 text-[#8AA79A] group-hover:text-[#1B8B67] group-hover:translate-x-0.5 transition-all" />
+        </div>
+
+        {/* Card 2: Weekly Contact Hours */}
+        <div
+          onClick={() => onNavigate('workload')}
+          className="bg-white rounded-2xl p-5 border border-[#D9E6DE] hover:border-[#1B8B67] hover:shadow-md transition-all cursor-pointer group flex items-center justify-between"
+        >
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-[#D1FAE5] text-[#059669] flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <Clock className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-[#527568]">Weekly Contact Hours</p>
+              <MetricValueSkeleton
+                isLoading={loadingState.subjects}
+                error={errorState.subjects}
+                value={totalContactHours}
+                unit=" hrs"
+              />
+              <p className="text-[11px] font-medium text-[#719184] mt-1">
+                {totalContactHours > 18 ? 'Workload Overload' : 'AICTE Optimal (16-18h)'}
+              </p>
+            </div>
+          </div>
+          <ChevronRight className="w-4 h-4 text-[#8AA79A] group-hover:text-[#1B8B67] group-hover:translate-x-0.5 transition-all" />
+        </div>
+
+        {/* Card 3: Class Attendance Average */}
+        <div
+          onClick={() => onNavigate('attendance')}
+          className="bg-white rounded-2xl p-5 border border-[#D9E6DE] hover:border-[#1B8B67] hover:shadow-md transition-all cursor-pointer group flex items-center justify-between"
+        >
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-[#FEF3C7] text-[#D97706] flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <CalendarCheck className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-[#527568]">Class Attendance</p>
+              <MetricValueSkeleton
+                isLoading={loadingState.attendance}
+                error={errorState.attendance}
+                value={facultySessions.length > 0 ? avgAttendancePct : 0}
+                unit="%"
+              />
+              <p className="text-[11px] font-medium text-[#719184] mt-1">
+                {facultySessions.length} session{facultySessions.length === 1 ? '' : 's'} recorded
+              </p>
+            </div>
+          </div>
+          <ChevronRight className="w-4 h-4 text-[#8AA79A] group-hover:text-[#1B8B67] group-hover:translate-x-0.5 transition-all" />
+        </div>
+
+        {/* Card 4: Student Inquiries */}
+        <div
+          onClick={() => onNavigate('queries')}
+          className="bg-white rounded-2xl p-5 border border-[#D9E6DE] hover:border-[#1B8B67] hover:shadow-md transition-all cursor-pointer group flex items-center justify-between"
+        >
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-[#EDE9FE] text-[#7C3AED] flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <MessageSquare className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-[#527568]">Student Queries</p>
+              <MetricValueSkeleton
+                isLoading={loadingState.queries}
+                error={errorState.queries}
+                value={myQueries.length}
+              />
+              <p className="text-[11px] font-medium text-[#719184] mt-1">
+                {pendingQueriesCount} Pending resolution
+              </p>
+            </div>
+          </div>
+          <ChevronRight className="w-4 h-4 text-[#8AA79A] group-hover:text-[#1B8B67] group-hover:translate-x-0.5 transition-all" />
+        </div>
+      </div>
+
+      {/* 3. Main Body: 2 Columns */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Left Column (2 Cols) */}
+        <div className="lg:col-span-2 space-y-6">
+          {/* A. Today's Academic Schedule */}
+          <div className="bg-white rounded-2xl border border-[#D9E6DE] p-5 shadow-xs">
+            <div className="flex items-center justify-between pb-3 border-b border-[#EAF0EC]">
+              <div className="flex items-center gap-2">
+                <Clock className="w-4 h-4 text-[#1B8B67]" />
+                <h2 className="text-sm font-bold text-[#14382C]">Today's Academic Teaching Schedule</h2>
+              </div>
+              <button
+                onClick={() => onNavigate('attendance')}
+                className="text-xs text-[#1B8B67] hover:underline font-bold cursor-pointer"
+              >
+                Full Attendance Registry
+              </button>
+            </div>
+
+            <div className="space-y-3 mt-4">
+              {loadingState.subjects ? (
+                <div className="space-y-3">
+                  {[1, 2].map((i) => (
+                    <div key={i} className="p-4 rounded-xl border border-[#D9E6DE] bg-[#F9FCFA] animate-pulse">
+                      <div className="h-4 w-44 bg-[#E0ECE5] rounded" />
+                      <div className="h-3 w-64 bg-[#E0ECE5] rounded mt-2" />
+                    </div>
+                  ))}
+                </div>
+              ) : todaySchedule.length === 0 ? (
+                <div className="p-8 text-center text-xs text-[#6F8B7F]">
+                  <p className="font-semibold text-[#14382C]">No classes scheduled for today.</p>
+                  <p className="mt-1">Courses assigned to you will populate your daily teaching timetable automatically.</p>
+                </div>
+              ) : (
+                todaySchedule.map(slot => (
+                  <div
+                    key={slot.id}
+                    className="p-4 rounded-xl border border-[#D9E6DE] bg-[#F9FCFA] hover:border-[#1B8B67] transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                  >
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-[#14382C] bg-[#EBF3EE] px-2 py-0.5 rounded border border-[#D9E6DE] text-[11px]">
+                          {slot.subjectCode}
+                        </span>
+                        <h3 className="font-bold text-[#14382C] text-sm">{slot.subjectName}</h3>
+                      </div>
+                      <p className="text-[#527568] mt-1 text-[11px]">
+                        {slot.slot} • {slot.room} • {slot.section}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2.5 shrink-0">
+                      <span
+                        className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                          slot.status === 'conducted'
+                            ? 'bg-[#EAF5EF] text-[#166E52] border border-[#CDE5D7]'
+                            : 'bg-[#E0F2FE] text-[#0284C7] border border-[#BAE6FD]'
+                        }`}
+                      >
+                        ● {slot.status}
+                      </span>
+                      <button
+                        onClick={() => onNavigate('attendance')}
+                        className="px-3.5 py-1.5 rounded-xl bg-[#1B8B67] hover:bg-[#167557] text-white font-bold text-xs transition-colors shadow-xs cursor-pointer active:scale-95"
+                      >
+                        Take Attendance
+                      </button>
+                    </div>
+                  </div>
+                ))
               )}
             </div>
-            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-[#0F172A]">
-              Faculty Teaching & Evaluation Workbench
-            </h1>
-            <p className="text-slate-600 text-xs sm:text-sm mt-1 max-w-3xl leading-relaxed">
-              {isRealFaculty ? (
-                <>
-                  {currentUser.name} ({currentUser.designation || 'Faculty'}) • {totalContactHours} Contact Hours/Week • {activeSubjects.length} Allocated Course Module{activeSubjects.length === 1 ? '' : 's'}.
-                </>
+          </div>
+
+          {/* B. Assigned Courses Syllabus Adherence */}
+          <div className="bg-white rounded-2xl border border-[#D9E6DE] p-5 shadow-xs">
+            <div className="flex items-center justify-between pb-3 border-b border-[#EAF0EC]">
+              <div className="flex items-center gap-2">
+                <BookOpenCheck className="w-4 h-4 text-[#1B8B67]" />
+                <h3 className="text-xs font-bold text-[#14382C] uppercase tracking-wider">
+                  Course Syllabus Completion
+                </h3>
+              </div>
+              <button
+                onClick={() => onNavigate('syllabus')}
+                className="text-xs text-[#1B8B67] hover:underline font-bold cursor-pointer"
+              >
+                Update Units
+              </button>
+            </div>
+
+            <div className="space-y-3 mt-4">
+              {activeSubjects.length === 0 ? (
+                <p className="text-xs text-[#6F8B7F] italic text-center py-4">No subjects assigned yet.</p>
               ) : (
-                <>
-                  Role Simulator View (Administrator: <strong className="text-slate-900">{currentUser.name}</strong>) • {activeSubjects.length} Course Module{activeSubjects.length === 1 ? '' : 's'} in Curriculum Preview.
-                </>
+                activeSubjects.slice(0, 4).map(sub => {
+                  const pct = sub.totalHoursPlanned > 0
+                    ? Math.min(100, Math.round((sub.hoursConducted / sub.totalHoursPlanned) * 100))
+                    : 0;
+
+                  return (
+                    <div key={sub.id} className="p-3.5 rounded-xl bg-[#F9FCFA] border border-[#D9E6DE] text-xs">
+                      <div className="flex items-center justify-between font-bold text-[#14382C] mb-1.5">
+                        <span className="truncate max-w-[220px]">{sub.code}: {sub.name}</span>
+                        <span className="text-[#1B8B67] font-mono">{pct}%</span>
+                      </div>
+                      <div className="w-full bg-[#E2ECE6] h-2 rounded-full overflow-hidden">
+                        <div
+                          className="bg-[#1B8B67] h-full rounded-full transition-all"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <div className="mt-1.5 flex items-center justify-between text-[11px] text-[#527568]">
+                        <span>{sub.hoursConducted} / {sub.totalHoursPlanned} Contact Hours</span>
+                        <span className="capitalize font-medium">{sub.status?.replace('_', ' ')}</span>
+                      </div>
+                    </div>
+                  );
+                })
               )}
+            </div>
+          </div>
+
+          {/* C. Teaching Assistant & AI Copilot Banner */}
+          <div className="bg-gradient-to-r from-[#EBF5EF] to-[#DEF0E5] border border-[#CBE2D4] rounded-2xl p-5 flex flex-col sm:flex-row items-center justify-between gap-5 shadow-xs">
+            <div className="flex items-start gap-4">
+              <div className="w-10 h-10 rounded-xl bg-[#1B8B67] text-white flex items-center justify-center shrink-0 shadow-xs mt-0.5">
+                <Sparkles className="w-5 h-5 text-amber-300" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-[#14382C]">
+                  Academic Copilot & Lesson Planning Assistant
+                </h3>
+                <p className="text-xs text-[#3D6052] font-medium mt-0.5">
+                  Generate course plans • Formulate CIA question rubrics • Summarize student query themes
+                </p>
+                <button
+                  onClick={onOpenAiAssistant}
+                  className="mt-3 inline-flex items-center gap-1.5 px-4 py-1.5 rounded-xl text-xs font-bold text-white bg-[#1B8B67] hover:bg-[#167557] transition-all shadow-xs cursor-pointer active:scale-95"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Launch AI Copilot</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="w-32 h-20 shrink-0 hidden sm:flex items-center justify-center">
+              <SmartTechBooksIllustration className="w-full h-full object-contain" />
+            </div>
+          </div>
+        </div>
+
+        {/* Right Column (1 Col) */}
+        <div className="space-y-6">
+          {/* A. Academic Excellence */}
+          <div className="bg-[#F0F8F4] border border-[#D5EADB] rounded-2xl p-5 text-center relative overflow-hidden shadow-xs">
+            <div className="w-24 h-20 mx-auto flex items-center justify-center mb-2">
+              <AcademicExcellenceIllustration className="w-full h-full object-contain" />
+            </div>
+            <h3 className="text-sm font-bold text-[#14382C]">Faculty Academic Excellence</h3>
+            <p className="text-xs text-[#527568] mt-0.5">
+              Empowering next-generation engineers.
             </p>
           </div>
 
-          <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
-            <button
-              onClick={() => onNavigate('attendance')}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-md text-xs font-semibold bg-[#0F172A] hover:bg-slate-800 text-white transition-colors cursor-pointer"
-            >
-              <CalendarCheck className="w-3.5 h-3.5" />
-              Mark Attendance
-            </button>
-            <button
-              onClick={() => onNavigate('marks')}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-md text-xs font-semibold bg-white hover:bg-slate-50 text-slate-700 transition-colors border border-[#E2E8F0] cursor-pointer"
-            >
-              <Award className="w-3.5 h-3.5" />
-              CIA Marks Entry
-            </button>
-            <button
-              onClick={() => onNavigate('syllabus')}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-md text-xs font-semibold bg-indigo-50 hover:bg-indigo-100 text-[#4F46E5] border border-indigo-200 transition-colors cursor-pointer"
-            >
-              <BookOpenCheck className="w-3.5 h-3.5" />
-              Syllabus Coverage
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* KPI Cards: 100% Real Database */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Allocated Courses */}
-        <div
-          onClick={() => onNavigate('syllabus')}
-          className="bg-white p-5 rounded-lg border border-[#E2E8F0] hover:border-indigo-400 hover:shadow-xs transition-all cursor-pointer"
-        >
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold text-slate-600">Allocated Courses</span>
-            <BookOpenCheck className="w-4 h-4 text-slate-400" />
-          </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl sm:text-3xl font-bold text-[#0F172A]">{activeSubjects.length}</span>
-            <span className="text-xs text-slate-500">Courses</span>
-          </div>
-          <p className="text-xs text-slate-500 mt-2">
-            {activeSubjects.length === 0
-              ? 'No courses assigned yet'
-              : `${theoryCount} Theory + ${labCount} Laboratory`}
-          </p>
-        </div>
-
-        {/* Weekly Contact Hours */}
-        <div
-          onClick={() => onNavigate('workload')}
-          className="bg-white p-5 rounded-lg border border-[#E2E8F0] hover:border-indigo-400 hover:shadow-xs transition-all cursor-pointer"
-        >
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold text-slate-600">Weekly Contact Hours</span>
-            <Clock className="w-4 h-4 text-slate-400" />
-          </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl sm:text-3xl font-bold text-[#0F172A]">{totalContactHours} hrs</span>
-            <span
-              className={`text-xs font-semibold px-1.5 py-0.5 rounded border ${
-                totalContactHours > 18
-                  ? 'text-amber-800 bg-amber-50 border-amber-300'
-                  : totalContactHours >= 12
-                  ? 'text-emerald-800 bg-emerald-50 border-emerald-200'
-                  : 'text-slate-700 bg-slate-100 border-slate-200'
-              }`}
-            >
-              {totalContactHours > 18 ? 'Overload' : totalContactHours >= 12 ? 'Optimal' : 'Light Load'}
-            </span>
-          </div>
-          <p className="text-xs text-slate-500 mt-2">AICTE Compliant Threshold (16-18h)</p>
-        </div>
-
-        {/* Average Student Attendance */}
-        <div
-          onClick={() => onNavigate('attendance')}
-          className="bg-white p-5 rounded-lg border border-[#E2E8F0] hover:border-indigo-400 hover:shadow-xs transition-all cursor-pointer"
-        >
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold text-slate-600">Class Attendance Average</span>
-            <CalendarCheck className="w-4 h-4 text-slate-400" />
-          </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl sm:text-3xl font-bold text-[#0F172A]">
-              {facultySessions.length > 0 ? `${avgAttendancePct}%` : 'N/A'}
-            </span>
-            <span className="text-xs text-slate-500">
-              {facultySessions.length} Session{facultySessions.length === 1 ? '' : 's'}
-            </span>
-          </div>
-          <p className="text-xs text-slate-500 mt-2">
-            {facultySessions.length === 0
-              ? 'No sessions marked yet'
-              : avgAttendancePct >= 75
-              ? 'Above statutory 75% cutoff'
-              : 'Attention needed for student turnout'}
-          </p>
-        </div>
-
-        {/* Student Inquiries */}
-        <div
-          onClick={() => onNavigate('queries')}
-          className="bg-white p-5 rounded-lg border border-[#E2E8F0] hover:border-indigo-400 hover:shadow-xs transition-all cursor-pointer"
-        >
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold text-slate-600">Student Inquiries</span>
-            <MessageSquare className="w-4 h-4 text-slate-400" />
-          </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl sm:text-3xl font-bold text-[#0F172A]">{myQueries.length}</span>
-            <span
-              className={`text-xs font-semibold px-1.5 py-0.5 rounded border ${
-                pendingQueriesCount > 0
-                  ? 'text-amber-800 bg-amber-50 border-amber-300'
-                  : 'text-emerald-800 bg-emerald-50 border-emerald-200'
-              }`}
-            >
-              {pendingQueriesCount} Pending
-            </span>
-          </div>
-          <p className="text-xs text-slate-500 mt-2">Academic & evaluation queries</p>
-        </div>
-      </div>
-
-      {/* Main Row: Today's Timetable & Course Syllabus Tracking */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Today's Timetable */}
-        <div className="lg:col-span-2 bg-white rounded-lg border border-[#E2E8F0] overflow-hidden">
-          <div className="p-4 sm:p-5 border-b border-[#E2E8F0] flex items-center justify-between">
-            <div>
-              <h2 className="text-sm font-bold text-[#0F172A] uppercase tracking-wider flex items-center gap-2">
-                <Clock className="w-4 h-4 text-[#4F46E5]" />
-                Today's Academic Teaching Schedule
-              </h2>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Dynamic schedule derived from allocated course subjects
-              </p>
-            </div>
-            <button
-              onClick={() => onNavigate('attendance')}
-              className="text-xs font-semibold text-[#4F46E5] hover:underline flex items-center gap-1 cursor-pointer"
-            >
-              Record Attendance <ArrowUpRight className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          <div className="divide-y divide-slate-100">
-            {todaySchedule.length === 0 ? (
-              <div className="p-8 text-center text-slate-500 text-xs">
-                <BookOpenCheck className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                <p className="font-semibold text-slate-700">No course subjects allocated yet</p>
-                <p className="text-slate-400 mt-1">Assign courses in Syllabus Coverage to populate your daily teaching timetable.</p>
-              </div>
-            ) : (
-              todaySchedule.map(slot => (
-                <div key={slot.id} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50 text-xs">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono font-bold text-slate-800 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
-                        {slot.subjectCode}
-                      </span>
-                      <h3 className="font-bold text-slate-900">{slot.subjectName}</h3>
-                    </div>
-                    <p className="text-slate-500 mt-1">
-                      {slot.slot} • {slot.room} • {slot.section}
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-2 shrink-0">
-                    <span
-                      className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                        slot.status === 'conducted'
-                          ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                          : 'bg-indigo-50 text-indigo-800 border border-indigo-200'
-                      }`}
-                    >
-                      ● {slot.status}
-                    </span>
-                    <button
-                      onClick={() => onNavigate('attendance')}
-                      className="px-2.5 py-1 rounded bg-[#0F172A] hover:bg-slate-800 text-white font-semibold text-[11px] cursor-pointer"
-                    >
-                      Take Attendance
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* Right Column: Syllabus Coverage Status */}
-        <div className="bg-white rounded-lg border border-[#E2E8F0] p-5 shadow-2xs">
-          <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-100">
-            <h3 className="text-xs font-bold text-[#0F172A] uppercase tracking-wider flex items-center gap-1.5">
-              <BookOpenCheck className="w-4 h-4 text-[#4F46E5]" />
-              Syllabus Completion
+          {/* B. Faculty Quick Actions */}
+          <div className="bg-white rounded-2xl border border-[#D9E6DE] p-5 shadow-xs">
+            <h3 className="text-xs font-bold text-[#14382C] uppercase tracking-wider flex items-center gap-1.5 mb-3">
+              <Sparkles className="w-3.5 h-3.5 text-[#1B8B67]" />
+              Faculty Actions
             </h3>
-            <button
-              onClick={() => onNavigate('syllabus')}
-              className="text-xs font-semibold text-[#4F46E5] hover:underline cursor-pointer"
-            >
-              Audit All
-            </button>
+
+            <div className="space-y-2">
+              {/* 1. Primary Mint Button */}
+              <button
+                onClick={() => onNavigate('attendance')}
+                className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-[#1B8B67] to-[#167557] hover:from-[#167557] hover:to-[#125D45] text-white flex items-center justify-between font-bold text-xs shadow-xs transition-all cursor-pointer group active:scale-[0.98]"
+              >
+                <div className="flex items-center gap-2.5">
+                  <CalendarCheck className="w-4 h-4 text-emerald-200" />
+                  <span>Mark Class Attendance</span>
+                </div>
+                <ChevronRight className="w-4 h-4 text-emerald-200 group-hover:translate-x-0.5 transition-transform" />
+              </button>
+
+              {/* 2. Enter Marks */}
+              <button
+                onClick={() => onNavigate('marks')}
+                className="w-full py-2.5 px-4 rounded-xl border border-[#D9E6DE] bg-white hover:bg-[#F4F8F6] text-[#14382C] flex items-center justify-between font-semibold text-xs transition-colors cursor-pointer group"
+              >
+                <div className="flex items-center gap-2.5">
+                  <Award className="w-4 h-4 text-[#1B8B67]" />
+                  <span>CIA Assessment Marks Entry</span>
+                </div>
+                <ChevronRight className="w-3.5 h-3.5 text-[#8AA79A] group-hover:translate-x-0.5 transition-transform" />
+              </button>
+
+              {/* 3. Master Notes */}
+              <button
+                onClick={() => onNavigate('notes')}
+                className="w-full py-2.5 px-4 rounded-xl border border-[#D9E6DE] bg-white hover:bg-[#F4F8F6] text-[#14382C] flex items-center justify-between font-semibold text-xs transition-colors cursor-pointer group"
+              >
+                <div className="flex items-center gap-2.5">
+                  <FileText className="w-4 h-4 text-[#1B8B67]" />
+                  <span>Upload Master Notes</span>
+                </div>
+                <ChevronRight className="w-3.5 h-3.5 text-[#8AA79A] group-hover:translate-x-0.5 transition-transform" />
+              </button>
+
+              {/* 4. Student Queries */}
+              <button
+                onClick={() => onNavigate('queries')}
+                className="w-full py-2.5 px-4 rounded-xl border border-[#D9E6DE] bg-white hover:bg-[#F4F8F6] text-[#14382C] flex items-center justify-between font-semibold text-xs transition-colors cursor-pointer group"
+              >
+                <div className="flex items-center gap-2.5">
+                  <MessageSquare className="w-4 h-4 text-[#1B8B67]" />
+                  <span>Respond to Student Queries</span>
+                </div>
+                <ChevronRight className="w-3.5 h-3.5 text-[#8AA79A] group-hover:translate-x-0.5 transition-transform" />
+              </button>
+            </div>
           </div>
 
-          <div className="space-y-3">
-            {activeSubjects.length === 0 ? (
-              <p className="text-xs text-slate-400 italic text-center py-4">No subjects registered.</p>
-            ) : (
-              activeSubjects.slice(0, 4).map(sub => {
-                const pct = sub.totalHoursPlanned > 0
-                  ? Math.min(100, Math.round((sub.hoursConducted / sub.totalHoursPlanned) * 100))
-                  : 0;
+          {/* C. Recent Senate Circulars & Department Notices */}
+          <div className="bg-white rounded-2xl border border-[#D9E6DE] p-5 shadow-xs">
+            <div className="flex items-center justify-between pb-3 border-b border-[#EAF0EC]">
+              <div className="flex items-center gap-2">
+                <FileText className="w-4 h-4 text-[#1B8B67]" />
+                <h3 className="text-xs font-bold text-[#14382C] uppercase tracking-wider">
+                  Academic Circulars
+                </h3>
+              </div>
+              <button
+                onClick={() => onNavigate('announcements')}
+                className="text-xs text-[#1B8B67] hover:underline font-bold cursor-pointer"
+              >
+                View All
+              </button>
+            </div>
 
-                return (
-                  <div key={sub.id} className="p-3 rounded-md bg-slate-50 border border-slate-200 text-xs">
-                    <div className="flex items-center justify-between font-bold text-slate-900 mb-1">
-                      <span className="truncate max-w-[170px]">{sub.code}: {sub.name}</span>
-                      <span className="text-[#4F46E5]">{pct}%</span>
-                    </div>
-                    <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden mt-1.5">
-                      <div
-                        className="bg-[#4F46E5] h-full rounded-full transition-all"
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                    <div className="mt-1 flex items-center justify-between text-[10px] text-slate-400">
-                      <span>{sub.hoursConducted} / {sub.totalHoursPlanned} Hours</span>
-                      <span className="capitalize">{sub.status.replace('_', ' ')}</span>
-                    </div>
+            <div className="space-y-3 mt-3">
+              {facultyAnnouncements.length === 0 ? (
+                <p className="text-xs text-[#6F8B7F] italic text-center py-4">No active circulars.</p>
+              ) : (
+                facultyAnnouncements.slice(0, 3).map(item => (
+                  <div key={item.id} className="p-3 rounded-xl bg-[#F9FCFA] border border-[#D9E6DE] text-xs">
+                    <span className="text-[9px] font-bold uppercase text-[#1B8B67] block">
+                      {item.category} • {item.date}
+                    </span>
+                    <p className="font-bold text-[#14382C] mt-0.5 line-clamp-1">{item.title}</p>
+                    <p className="text-[11px] text-[#527568] mt-1 line-clamp-2">{item.content}</p>
                   </div>
-                );
-              })
-            )}
+                ))
+              )}
+            </div>
           </div>
         </div>
       </div>
+
+      {/* 4. Institutional Footer Bar */}
+      <footer className="flex flex-col sm:flex-row items-center justify-between text-xs text-[#527568] pt-6 pb-2 border-t border-[#D9E6DE] mt-8 gap-2">
+        <div className="flex items-center gap-2">
+          <span className="font-bold text-[#14382C]">AcademicCore</span>
+          <span>v1.0</span>
+          <span>|</span>
+          <span>Faculty Portal • National Institute of Technology</span>
+        </div>
+        <div className="italic text-[#3D6052] flex items-center gap-1">
+          <span>"Good education is the foundation of a better tomorrow."</span>
+          <span>🌱</span>
+        </div>
+      </footer>
     </div>
   );
 };

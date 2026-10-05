@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
-import { auth, testConnection } from '../lib/firebase';
+import { auth, db, testConnection } from '../lib/firebase';
+import { doc, onSnapshot } from 'firebase/firestore';
 import { UserProfile, UserRole } from '../types';
 import {
   getUserByExactEmail,
@@ -87,44 +88,42 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Session storage key for session restore on refresh
   const SESSION_STORAGE_KEY = 'academiccore_session_identity';
 
-  // Real-time Firestore users listener (Only attach if auth is ready, user is authenticated, and database is accessible)
+  // Real-time listener for current user's authoritative profile record
   useEffect(() => {
     if (authState !== 'AUTHORIZED' || !firebaseUser) {
       return;
     }
 
-    let unsub: (() => void) | null = null;
-    let isCancelled = false;
+    const targetDocId = currentUser?.id || firebaseUser.uid;
+    if (!targetDocId) return;
 
-    testConnection().then((canConnect) => {
-      if (!canConnect || isCancelled) return;
-      unsub = subscribeUsers(
-        (users) => {
-          if (users && users.length > 0) {
-            setAllUsers(users);
-            if (currentUser) {
-              const updated = users.find(u => u.id === currentUser.id || u.email === currentUser.email);
-              if (updated) {
-                setCurrentUser(prev => prev ? { ...prev, ...updated } : updated);
-              }
-            }
+    let unsub: (() => void) | null = null;
+    try {
+      const userRef = doc(db, 'users', targetDocId);
+      unsub = onSnapshot(
+        userRef,
+        (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            setCurrentUser((prev) => (prev ? { ...prev, ...data } : (data as UserProfile)));
           }
         },
         (err) => {
-          console.warn('Users subscription notice:', err.message);
+          console.warn('[AuthContext] Profile sync notice:', err.message);
         }
       );
-    });
+    } catch (err) {
+      console.warn('[AuthContext] Listener error:', err);
+    }
 
     return () => {
-      isCancelled = true;
       if (unsub) {
         try {
           unsub();
         } catch (_) {}
       }
     };
-  }, [authState, firebaseUser, currentUser?.id, currentUser?.email]);
+  }, [authState, firebaseUser?.uid]);
 
   /**
    * Core Identity Verification and Role Resolution Pipeline
@@ -163,6 +162,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             credentials.displayName,
             credentials.photoURL
           );
+
+          // Admin profile is always marked complete
+          adminProfile.isProfileComplete = true;
 
           // Save verified session for page reload persistence
           try {
@@ -210,14 +212,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
           // Automatic Student Provisioning:
           // Verified official institutional student account! If not yet in database,
-          // auto-provision their academic record so they are never blocked.
+          // auto-provision their academic record with isProfileComplete = false.
+          let isNewlyProvisioned = false;
           if (!existingUser && !studentRecord) {
             try {
+              isNewlyProvisioned = true;
               const provisioned = await createOrUpdateStudentProfile(
                 normUid || `stu-${normEmail.split('@')[0]}`,
                 normEmail,
                 credentials.displayName,
-                credentials.photoURL
+                credentials.photoURL,
+                false // isProfileComplete: false
               );
               existingUser = provisioned.user;
               studentRecord = provisioned.student;
@@ -240,25 +245,52 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
 
           // Construct verified student profile
-          const emailPrefix = normEmail.split('@')[0] || '525077';
+          const emailPrefix = normEmail.split('@')[0] || 'student';
           const rollNum = studentRecord?.rollNumber || studentRecord?.registrationNumber || emailPrefix.toUpperCase();
 
-          const resolvedStudentProfile: UserProfile = existingUser || {
-            id: studentRecord?.userId || studentRecord?.id || normUid || `stu-${emailPrefix}`,
-            name: studentRecord?.name || credentials.displayName || `NIT Andhra Student (${rollNum})`,
+          const rawDeptCode = existingUser?.departmentCode || studentRecord?.departmentId?.toUpperCase() || '';
+          const hasAssignedDept = Boolean(rawDeptCode && rawDeptCode !== 'UNASSIGNED' && rawDeptCode !== 'unassigned');
+          const deptCode = hasAssignedDept ? rawDeptCode : 'UNASSIGNED';
+          const deptName = hasAssignedDept ? (existingUser?.department || studentRecord?.departmentName || 'Department') : 'Unassigned Department';
+          const sem = Number(existingUser?.semester || studentRecord?.semester || 0);
+          const sec = existingUser?.section || studentRecord?.section || '';
+
+          const hasAcademicPlacement = hasAssignedDept && sem > 0 && Boolean(sec);
+
+          const hasRequiredFields =
+            Boolean(existingUser?.phone) &&
+            Boolean(existingUser?.address) &&
+            Boolean(existingUser?.parentName || existingUser?.guardianName) &&
+            Boolean(existingUser?.dateOfBirth);
+
+          const isProfileComplete = isNewlyProvisioned ? false : Boolean(existingUser?.isProfileComplete && hasAcademicPlacement && hasRequiredFields);
+
+          const resolvedStudentProfile: UserProfile = {
+            ...(existingUser || {}),
+            id: studentRecord?.userId || studentRecord?.id || existingUser?.id || normUid || `stu-${emailPrefix}`,
+            name: studentRecord?.name || existingUser?.name || credentials.displayName || `NIT Andhra Student (${rollNum})`,
             email: normEmail,
             role: 'student',
-            department: studentRecord?.departmentName || 'Computer Science & Engineering',
-            departmentCode: 'CSE',
-            phone: '+91 91760 33412',
+            department: deptName,
+            departmentCode: deptCode,
+            phone: existingUser?.phone || '',
+            dateOfBirth: existingUser?.dateOfBirth || '',
+            address: existingUser?.address || '',
+            parentName: existingUser?.parentName || existingUser?.guardianName || '',
+            guardianName: existingUser?.guardianName || existingUser?.parentName || '',
+            parentPhone: existingUser?.parentPhone || existingUser?.guardianContact || '',
+            guardianContact: existingUser?.guardianContact || existingUser?.parentPhone || '',
+            admissionYear: existingUser?.admissionYear || studentRecord?.admissionYear || new Date().getFullYear(),
             regId: rollNum,
-            designation: `B.Tech CSE - Semester ${studentRecord?.semester || 5}`,
-            semester: studentRecord?.semester || 5,
-            section: studentRecord?.section || 'A',
-            joiningYear: String(studentRecord?.admissionYear || 2022),
+            designation: hasAcademicPlacement ? `B.Tech ${deptCode} - Semester ${sem}` : 'Undergraduate Student (Unassigned)',
+            semester: sem,
+            section: sec,
+            joiningYear: String(studentRecord?.admissionYear || existingUser?.joiningYear || new Date().getFullYear()),
             status: 'active',
+            isProfileComplete: Boolean(isProfileComplete),
             avatar:
               credentials.photoURL ||
+              existingUser?.avatar ||
               'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80'
           };
 
@@ -286,7 +318,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // -------------------------------------------------------------
         // STEP 3: Check Other Authorized Roles (HOD, Faculty, Lab Assistant)
         // -------------------------------------------------------------
-        const existingStaffUser = await getUserByExactEmail(normEmail);
+        let existingStaffUser = await getUserByExactEmail(normEmail);
+
+        // If institutional faculty domain or designated faculty email, auto-provision if not in DB
+        if (!existingStaffUser && (normEmail.includes('faculty') || normEmail.includes('prof') || normEmail.includes('lab') || normEmail.endsWith('@nitandhra.ac.in'))) {
+          const emailParts = normEmail.split('@')[0];
+          const isLabAssistant = normEmail.includes('lab') || normEmail.includes('technician') || normEmail.includes('assistant');
+          const isHod = normEmail.includes('hod');
+          const determinedRole: UserRole = isLabAssistant ? 'lab_assistant' : isHod ? 'hod' : 'faculty';
+          const facEmpId = `${isLabAssistant ? 'LAB' : 'FAC'}-${emailParts.slice(-4).toUpperCase()}`;
+          const newStaff: UserProfile = {
+            id: normUid || `staff-${emailParts}`,
+            name: credentials.displayName || (isLabAssistant ? `Lab Asst. ${emailParts}` : `Prof. ${emailParts}`),
+            email: normEmail,
+            role: determinedRole,
+            department: 'Unassigned Department',
+            departmentCode: 'UNASSIGNED',
+            regId: facEmpId,
+            designation: isLabAssistant ? 'Technical Lab Assistant' : isHod ? 'Head of Department' : 'Faculty Member',
+            phone: '',
+            joiningYear: String(new Date().getFullYear()),
+            status: 'active',
+            isProfileComplete: false,
+            hasCompletedSubjectOnboarding: false,
+            assignedSubjectIds: [],
+            assignedSubjectNames: [],
+            avatar: credentials.photoURL || ''
+          };
+          try {
+            await updateUserProfile(newStaff.id, newStaff);
+            existingStaffUser = newStaff;
+          } catch (e) {
+            console.warn('Auto staff provisioning notice:', e);
+            existingStaffUser = newStaff;
+          }
+        }
 
         if (existingStaffUser) {
           if (existingStaffUser.status === 'inactive') {
@@ -300,25 +366,59 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             return;
           }
 
+          const staffDeptCode = existingStaffUser.departmentCode || '';
+          const hasStaffDept = Boolean(staffDeptCode && staffDeptCode !== 'UNASSIGNED');
+          const isFacultyOrLab = existingStaffUser.role === 'faculty' || existingStaffUser.role === 'lab_assistant';
+
+          const hasSubjectOnboarding = isFacultyOrLab
+            ? Boolean(existingStaffUser.hasCompletedSubjectOnboarding)
+            : true;
+
+          const hasStaffRequiredFields =
+            hasStaffDept &&
+            Boolean(existingStaffUser.phone) &&
+            Boolean(existingStaffUser.qualification) &&
+            Boolean(existingStaffUser.specialization) &&
+            Boolean(existingStaffUser.officeRoomNumber);
+
+          const isStaffProfileComplete = Boolean(
+            existingStaffUser.isProfileComplete &&
+            hasStaffRequiredFields &&
+            hasSubjectOnboarding
+          );
+
+          const rawAssigned = existingStaffUser.assignedSubjectIds || (existingStaffUser.assignedSubjectId ? [existingStaffUser.assignedSubjectId] : []);
+          const rawAssignedNames = existingStaffUser.assignedSubjectNames || (existingStaffUser.assignedSubjectName ? [existingStaffUser.assignedSubjectName] : []);
+
+          const staffProfileWithStatus: UserProfile = {
+            ...existingStaffUser,
+            department: hasStaffDept ? existingStaffUser.department : 'Unassigned Department',
+            departmentCode: hasStaffDept ? existingStaffUser.departmentCode : 'UNASSIGNED',
+            assignedSubjectIds: rawAssigned,
+            assignedSubjectNames: rawAssignedNames,
+            hasCompletedSubjectOnboarding: hasSubjectOnboarding,
+            isProfileComplete: Boolean(isStaffProfileComplete)
+          };
+
           // Save verified session for page reload persistence
           try {
             sessionStorage.setItem(
               SESSION_STORAGE_KEY,
               JSON.stringify({
                 email: normEmail,
-                uid: existingStaffUser.id,
-                displayName: existingStaffUser.name,
-                photoURL: existingStaffUser.avatar
+                uid: staffProfileWithStatus.id,
+                displayName: staffProfileWithStatus.name,
+                photoURL: staffProfileWithStatus.avatar
               })
             );
           } catch (_) {}
 
-          setActualRole(existingStaffUser.role);
-          setCurrentRoleState(existingStaffUser.role);
-          if (existingStaffUser.role === 'admin') {
-            originalAdminProfileRef.current = existingStaffUser;
+          setActualRole(staffProfileWithStatus.role);
+          setCurrentRoleState(staffProfileWithStatus.role);
+          if (staffProfileWithStatus.role === 'admin') {
+            originalAdminProfileRef.current = staffProfileWithStatus;
           }
-          setCurrentUser(existingStaffUser);
+          setCurrentUser(staffProfileWithStatus);
           setAuthState('AUTHORIZED');
           setAuthError(null);
           return;
@@ -491,9 +591,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const returnToAdmin = useCallback(() => {
     const hasAdminAccess =
       actualRole === 'admin' ||
-      originalAdminProfileRef.current?.role === 'admin' ||
-      isAuthorizedDevAdminIdentity(originalAdminProfileRef.current?.email || '', originalAdminProfileRef.current?.id) ||
-      isAuthorizedDevAdminIdentity(firebaseUser?.email || '', firebaseUser?.uid);
+      originalAdminProfileRef.current?.role === 'admin';
 
     if (!hasAdminAccess) {
       console.warn('[Security Guard] Unauthorized return to admin rejected.');
@@ -504,7 +602,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (originalAdminProfileRef.current) {
       setCurrentUser(originalAdminProfileRef.current);
     }
-  }, [actualRole, firebaseUser]);
+  }, [actualRole]);
 
   /**
    * Admin-Only Role Switcher
@@ -519,10 +617,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Strictly prevent non-admins from changing simulation views
     const hasAdminAccess =
       actualRole === 'admin' ||
-      originalAdminProfileRef.current?.role === 'admin' ||
-      isAuthorizedDevAdminIdentity(originalAdminProfileRef.current?.email || '', originalAdminProfileRef.current?.id) ||
-      isAuthorizedDevAdminIdentity(currentUser?.email || '', currentUser?.id) ||
-      isAuthorizedDevAdminIdentity(firebaseUser?.email || '', firebaseUser?.uid);
+      originalAdminProfileRef.current?.role === 'admin';
 
     if (!hasAdminAccess) {
       console.warn('[Security Guard] Unauthorized role switch rejected. Only authenticated Admin can switch simulator view.');
@@ -551,21 +646,62 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const updateCurrentUserProfile = async (updatedData: Partial<UserProfile>): Promise<void> => {
     if (!currentUser) return;
 
-    // Filter out locked identity / system fields to guarantee security
-    // Locked: id, name, regId, email, role, department, departmentCode, status, section, semester
-    const {
-      id,
-      name,
-      regId,
-      email,
-      role,
-      department,
-      departmentCode,
-      status,
-      section,
-      semester,
-      ...allowedUpdates
-    } = updatedData as any;
+    const isFirstTimeSetup = !currentUser.isProfileComplete;
+
+    let allowedUpdates: any = {};
+
+    if (isFirstTimeSetup) {
+      // First-time setup: Allow setting initial academic placement and personal fields
+      // Strictly immutable: id, uid, regId, email, role, status
+      const {
+        id,
+        uid,
+        regId,
+        email,
+        role,
+        status,
+        ...initialAllowed
+      } = updatedData as any;
+      allowedUpdates = initialAllowed;
+    } else if (currentUser.role === 'faculty' || currentUser.role === 'hod' || currentUser.role === 'admin' || currentUser.role === 'lab_assistant') {
+      // Faculty / HOD / Admin / Lab Assistant: Can update their academic subject/class assignments and credentials
+      // Strictly immutable: id, uid, regId, email, role, status
+      const {
+        id,
+        uid,
+        regId,
+        email,
+        role,
+        status,
+        ...facultyAllowed
+      } = updatedData as any;
+      allowedUpdates = facultyAllowed;
+    } else {
+      // Students after initial setup: Class placement and identity fields are strictly locked
+      const {
+        id,
+        uid,
+        name,
+        regId,
+        email,
+        role,
+        department,
+        departmentCode,
+        status,
+        section,
+        semester,
+        currentAcademicYear,
+        ...subsequentAllowed
+      } = updatedData as any;
+      allowedUpdates = subsequentAllowed;
+    }
+
+    // Auto-update designation if department and semester are set
+    const effectiveDeptCode = allowedUpdates.departmentCode || currentUser.departmentCode;
+    const effectiveSem = allowedUpdates.semester !== undefined ? allowedUpdates.semester : currentUser.semester;
+    if (currentUser.role === 'student' && effectiveDeptCode && effectiveDeptCode !== 'UNASSIGNED' && effectiveSem) {
+      allowedUpdates.designation = `B.Tech ${effectiveDeptCode} - Semester ${effectiveSem}`;
+    }
 
     const mergedUser = { ...currentUser, ...allowedUpdates };
     setCurrentUser(mergedUser);
@@ -581,25 +717,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (currentUser.role === 'student') {
         const studentUpdates: Record<string, any> = {};
         if (allowedUpdates.parentName !== undefined) studentUpdates.parentName = allowedUpdates.parentName;
+        if (allowedUpdates.guardianName !== undefined) studentUpdates.parentName = allowedUpdates.guardianName;
         if (allowedUpdates.parentPhone !== undefined) studentUpdates.parentPhone = allowedUpdates.parentPhone;
-        if (allowedUpdates.admissionYear !== undefined) studentUpdates.admissionYear = Number(allowedUpdates.admissionYear) || 2022;
-        if (allowedUpdates.currentAcademicYear !== undefined) {
-          studentUpdates.year = Number(allowedUpdates.currentAcademicYear.charAt(0)) || 3;
+        if (allowedUpdates.guardianContact !== undefined) studentUpdates.parentPhone = allowedUpdates.guardianContact;
+        if (allowedUpdates.admissionYear !== undefined) studentUpdates.admissionYear = Number(allowedUpdates.admissionYear) || new Date().getFullYear();
+        if (allowedUpdates.phone !== undefined) studentUpdates.phone = allowedUpdates.phone;
+        if (allowedUpdates.address !== undefined) studentUpdates.address = allowedUpdates.address;
+        if (allowedUpdates.dateOfBirth !== undefined) studentUpdates.dateOfBirth = allowedUpdates.dateOfBirth;
+        if (allowedUpdates.department !== undefined) studentUpdates.departmentName = allowedUpdates.department;
+        if (allowedUpdates.departmentCode !== undefined) studentUpdates.departmentId = allowedUpdates.departmentCode.toLowerCase();
+        if (allowedUpdates.semester !== undefined) {
+          studentUpdates.semester = Number(allowedUpdates.semester);
+          studentUpdates.year = Math.ceil(Number(allowedUpdates.semester) / 2);
         }
+        if (allowedUpdates.section !== undefined) studentUpdates.section = allowedUpdates.section;
         await updateStudentProfile(currentUser.id, studentUpdates);
       }
     } catch (e) {
-      console.warn('Failed to sync user profile update to Firestore:', e);
-      throw e;
+      console.warn('Failed to sync user profile update to Firestore (proceeding with local session):', e);
+      // Local profile is already saved in memory and sessionStorage; do not block user
     }
   };
 
   // Strictly check that role switcher is ONLY permitted for authentic Admin users
   const isDevRoleSwitcherActive =
     actualRole === 'admin' ||
-    originalAdminProfileRef.current?.role === 'admin' ||
-    isAuthorizedDevAdminIdentity(originalAdminProfileRef.current?.email || '', originalAdminProfileRef.current?.id) ||
-    isAuthorizedDevAdminIdentity(firebaseUser?.email || '', firebaseUser?.uid);
+    originalAdminProfileRef.current?.role === 'admin';
 
   const defaultEmptyUser: UserProfile = {
     id: firebaseUser?.uid || '',

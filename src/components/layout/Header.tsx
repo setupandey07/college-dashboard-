@@ -17,6 +17,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { useAcademicData } from '../../context/AcademicDataContext';
 import { UserRole } from '../../types';
+import { filterQueriesForUser } from '../../lib/queryPrivacy';
 
 interface HeaderProps {
   currentTab: string;
@@ -32,7 +33,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenMobileMenu
 }) => {
   const { currentUser, currentRole, setRole, returnToAdmin, logout, isDevRoleSwitcherActive, isSimulatingRole } = useAuth();
-  const { announcements, queries } = useAcademicData();
+  const { announcements, queries, notifications, unreadNotificationCount, markNotificationRead, markAllNotificationsRead } = useAcademicData();
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showRoleMenu, setShowRoleMenu] = useState(false);
@@ -69,7 +70,8 @@ export const Header: React.FC<HeaderProps> = ({
 
   const currentRoleMeta = rolesList.find(r => r.role === currentRole) || rolesList[0];
 
-  const pendingQueriesCount = queries.filter(q => q.status === 'open' || q.status === 'in_progress').length;
+  const userVisibleQueries = filterQueriesForUser(queries, currentUser, currentRole);
+  const pendingQueriesCount = userVisibleQueries.filter(q => q.status === 'open' || q.status === 'in_progress').length;
   const recentNotifications = announcements.slice(0, 4);
 
   const getInitials = (name: string) => {
@@ -85,13 +87,16 @@ export const Header: React.FC<HeaderProps> = ({
       case 'admin':
         return 'NIT Academic Governance / Office of the Dean';
       case 'hod':
-        return 'Department of Computer Science & Engineering / HOD Portal';
+        return `${currentUser.department && currentUser.department !== 'Unassigned Department' ? currentUser.department : 'Academic Department'} / HOD Portal`;
       case 'faculty':
-        return 'Faculty of Engineering / Department of Computer Science';
+        return `Faculty of Engineering / ${currentUser.department && currentUser.department !== 'Unassigned Department' ? currentUser.department : 'Department'}`;
       case 'lab_assistant':
         return 'Central Computing Facility / Advanced Systems Lab';
-      case 'student':
-        return 'Undergraduate Academic Portal / B.Tech CSE (Sem 5)';
+      case 'student': {
+        const dept = currentUser.departmentCode && currentUser.departmentCode !== 'UNASSIGNED' ? currentUser.departmentCode : 'Undergraduate';
+        const sem = currentUser.semester && currentUser.semester > 0 ? ` (Sem ${currentUser.semester})` : '';
+        return `Undergraduate Academic Portal / B.Tech ${dept}${sem}`;
+      }
       default:
         return 'National Institute of Technology / AcademicCore';
     }
@@ -104,7 +109,9 @@ export const Header: React.FC<HeaderProps> = ({
       case 'attendance':
         return 'Attendance Monitoring & Eligibility Registry';
       case 'marks':
-        return 'Continuous Internal Assessment (CIA) & Marks';
+        return 'Marks & Internal Assessments';
+      case 'notes':
+        return 'Master Notes & Academic Batches Repository';
       case 'syllabus':
         return 'Syllabus Adherence & Contact Hours Audit';
       case 'workload':
@@ -131,13 +138,13 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className="sticky top-0 z-30 bg-white border-b border-[#E2E8F0]">
+    <header className="sticky top-0 z-30 bg-white border-b border-[#D9E6DE]">
       <div className="px-4 sm:px-6 py-2.5 flex items-center justify-between gap-4">
-        {/* Left: Mobile Toggle & Page Header with Institutional Breadcrumb */}
-        <div className="flex items-center gap-3 min-w-0">
+        {/* Left: Mobile Toggle & Global SaaS Search Bar matching reference */}
+        <div className="flex items-center gap-3 flex-1 max-w-xl">
           <button
             onClick={onOpenMobileMenu}
-            className="md:hidden p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-md border border-slate-200"
+            className="md:hidden p-2 text-[#3D6052] hover:text-[#14382C] hover:bg-[#EBF3EE] rounded-lg border border-[#D9E6DE]"
             aria-label="Toggle Navigation"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -145,96 +152,98 @@ export const Header: React.FC<HeaderProps> = ({
             </svg>
           </button>
 
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 text-[11px] font-medium text-slate-500">
-              <span className="truncate hidden sm:inline">{getBreadcrumb()}</span>
-              <span className="hidden sm:inline text-slate-300">/</span>
-              <span className="font-semibold text-slate-700 capitalize">{currentTab}</span>
-            </div>
-            <h1 className="text-sm sm:text-base font-bold text-[#0F172A] tracking-tight truncate leading-snug">
-              {getPageTitle()}
-            </h1>
-          </div>
-        </div>
-
-        {/* Center: Clean Institutional Search Bar */}
-        <div className="hidden lg:flex items-center flex-1 max-w-xs xl:max-w-sm mx-4">
+          {/* Reference Search Bar: Search anything — student, faculty, department, course... [⌘ K] */}
           <div className="relative w-full">
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+            <Search className="w-4 h-4 text-[#6F8B7F] absolute left-3.5 top-3" />
             <input
               type="text"
-              placeholder="Search roll no, course code, circular..."
+              placeholder="Search anything — student, faculty, department, course..."
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              className="w-full text-xs pl-8 pr-3 py-1.5 bg-[#F8FAFC] border border-[#E2E8F0] rounded-md focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#4F46E5] text-slate-800 placeholder-slate-400 transition-colors"
+              className="w-full text-xs pl-10 pr-12 py-2.5 bg-[#F4F8F6] border border-[#D9E6DE] rounded-xl focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#1B8B67] focus:border-[#1B8B67] text-[#14382C] placeholder-[#6F8B7F] transition-all"
             />
+            <div className="absolute right-3 top-2.5 hidden sm:flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-[#EBF3EE] border border-[#D0E2D6] text-[10px] font-semibold text-[#4D6D61]">
+              <span>⌘</span>
+              <span>K</span>
+            </div>
           </div>
         </div>
 
-        {/* Right: Institutional Status, Role Dropdown, Alerts & Profile */}
+        {/* Right Controls: Live Pill, Role Selector, Notifications, AI Copilot, Profile */}
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-          {/* Subtle Institutional Real-Time Indicator */}
-          <div className="hidden xl:flex items-center gap-1.5 text-xs text-slate-600 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-md">
-            <span className="w-2 h-2 rounded-full bg-[#10B981]" />
-            <span className="font-medium text-[11px] text-slate-700">Live · AY 2026-27</span>
+          {/* Live Status Pill: ● Live • AY 2026-27 */}
+          <div className="hidden lg:flex items-center gap-2 text-xs text-[#1B6E52] bg-[#EAF5EF] border border-[#CDE5D7] px-3 py-1.5 rounded-full font-semibold">
+            <span className="w-2 h-2 rounded-full bg-[#10B981] animate-pulse" />
+            <span className="text-[11px]">Live • AY 2026–27</span>
           </div>
 
-          {/* Clean Institutional Role Selector Dropdown (Authorized Admin Only) */}
+          {/* AI Copilot Button */}
+          <button
+            onClick={onOpenAiAssistant}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-[#166E52] bg-[#EBF5EF] hover:bg-[#DEECE2] border border-[#CDE5D7] rounded-xl transition-colors cursor-pointer"
+            title="Institutional Academic Assistant"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-[#1B8B67]" />
+            <span className="hidden sm:inline">AI Copilot</span>
+          </button>
+
+          {/* Role Selector Button & Dropdown matching reference */}
           {isDevRoleSwitcherActive && (
             <div className="relative" ref={roleMenuRef}>
               <button
                 onClick={() => setShowRoleMenu(!showRoleMenu)}
-                className={`flex items-center gap-2 px-2.5 py-1.5 border rounded-md text-xs transition-colors ${
+                className={`flex items-center gap-2 px-3 py-1.5 border rounded-xl text-xs transition-all cursor-pointer ${
                   currentRole !== 'admin'
-                    ? 'bg-amber-50 hover:bg-amber-100/80 border-amber-300 text-amber-900 shadow-sm'
-                    : 'bg-slate-50 hover:bg-slate-100 border-[#E2E8F0] text-slate-800'
+                    ? 'bg-[#FEF3C7] hover:bg-[#FDE68A] border-[#F59E0B]/40 text-[#92400E]'
+                    : 'bg-white hover:bg-[#F4F8F6] border-[#D9E6DE] text-[#14382C]'
                 }`}
-                title="Admin Role Switcher: Test and experience all role workflows"
+                title="Switch active role view"
               >
                 {currentRole !== 'admin' ? (
                   <Eye className="w-3.5 h-3.5 text-amber-600 animate-pulse" />
                 ) : (
-                  <Shield className="w-3.5 h-3.5 text-[#4F46E5]" />
+                  <Shield className="w-3.5 h-3.5 text-[#1B8B67]" />
                 )}
                 <div className="text-left hidden sm:block">
                   <span className={`text-[9px] uppercase font-bold block leading-none ${
-                    currentRole !== 'admin' ? 'text-amber-700' : 'text-slate-400'
+                    currentRole !== 'admin' ? 'text-amber-800' : 'text-[#6F8B7F]'
                   }`}>
-                    {currentRole !== 'admin' ? 'Visiting Role' : 'Role'}
+                    {currentRole !== 'admin' ? 'Visiting' : 'ROLE'}
                   </span>
-                  <span className="font-bold leading-tight">{currentRoleMeta.title}</span>
+                  <span className="font-bold leading-tight capitalize text-[#14382C] text-xs">
+                    {currentRoleMeta.title}
+                  </span>
                 </div>
-                <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+                <ChevronDown className="w-3.5 h-3.5 text-[#6F8B7F]" />
               </button>
 
               {showRoleMenu && (
-                <div className="absolute right-0 mt-1.5 w-72 bg-white border border-[#E2E8F0] rounded-lg shadow-xl py-1.5 z-50 animate-in fade-in duration-100">
-                  <div className="px-3 py-1.5 border-b border-slate-100">
+                <div className="absolute right-0 mt-2 w-72 bg-white border border-[#D9E6DE] rounded-2xl shadow-xl py-2 z-50 animate-in fade-in duration-100">
+                  <div className="px-4 py-2 border-b border-[#EAF0EC]">
                     <div className="flex items-center justify-between">
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                        Admin Role Switcher
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-[#6F8B7F]">
+                        Role Switcher
                       </p>
-                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
-                        Admin Access
+                      <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-[#EAF5EF] text-[#166E52] border border-[#CDE5D7]">
+                        Active
                       </span>
                     </div>
-                    <p className="text-[11px] text-slate-500 mt-0.5">
-                      Visit any role to experience their portal and test workflows
+                    <p className="text-[11px] text-[#4D6D61] mt-0.5">
+                      Switch between roles to manage different sections
                     </p>
                   </div>
 
-                  {/* Return to Admin quick action button if currently in another role */}
                   {currentRole !== 'admin' && (
-                    <div className="p-1.5 border-b border-slate-100 bg-amber-50/50">
+                    <div className="p-2 border-b border-[#EAF0EC] bg-[#FEF3C7]/40">
                       <button
                         onClick={() => {
                           returnToAdmin();
                           setShowRoleMenu(false);
                         }}
-                        className="w-full px-3 py-2 rounded text-left flex items-center gap-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition-colors shadow-sm"
+                        className="w-full px-3 py-2 rounded-xl text-left flex items-center gap-2 bg-[#D97706] hover:bg-[#B45309] text-white font-bold text-xs transition-colors shadow-xs"
                       >
-                        <RotateCcw className="w-3.5 h-3.5 text-slate-950" />
-                        <span>Return to Admin (Dean) Mode</span>
+                        <RotateCcw className="w-3.5 h-3.5 text-white" />
+                        <span>Return to Admin Mode</span>
                       </button>
                     </div>
                   )}
@@ -249,18 +258,18 @@ export const Header: React.FC<HeaderProps> = ({
                             setRole(r.role);
                             setShowRoleMenu(false);
                           }}
-                          className={`w-full px-3 py-2 text-left flex items-center justify-between text-xs hover:bg-slate-50 transition-colors ${
-                            isSelected ? 'bg-indigo-50/70 font-semibold text-[#4F46E5]' : 'text-slate-700'
+                          className={`w-full px-4 py-2 text-left flex items-center justify-between text-xs hover:bg-[#F4F8F6] transition-colors ${
+                            isSelected ? 'bg-[#EAF5EF] font-bold text-[#166E52]' : 'text-[#14382C]'
                           }`}
                         >
                           <div className="flex items-center gap-2.5">
                             <span className="text-sm">{r.icon}</span>
                             <div>
                               <p className="font-bold leading-tight">{r.title}</p>
-                              <p className="text-[10px] text-slate-500">{r.subtitle}</p>
+                              <p className="text-[10px] text-[#6F8B7F]">{r.subtitle}</p>
                             </div>
                           </div>
-                          {isSelected && <Check className="w-4 h-4 text-[#4F46E5] shrink-0" />}
+                          {isSelected && <Check className="w-4 h-4 text-[#1B8B67] shrink-0" />}
                         </button>
                       );
                     })}
@@ -270,101 +279,148 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           )}
 
-          {/* AI Copilot Button */}
-          <button
-            onClick={onOpenAiAssistant}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-[#4F46E5] bg-indigo-50 hover:bg-indigo-100/80 border border-indigo-200/80 rounded-md transition-colors"
-            title="Institutional Academic Assistant"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-[#4F46E5]" />
-            <span className="hidden sm:inline">AI Copilot</span>
-          </button>
-
-          {/* Notifications Dropdown */}
+          {/* Private Notifications Dropdown */}
           <div className="relative" ref={notifMenuRef}>
             <button
               onClick={() => setShowNotifications(!showNotifications)}
-              className="relative p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors border border-transparent hover:border-slate-200"
-              aria-label="Notifications"
+              className="relative p-2.5 text-[#4D6D61] hover:text-[#14382C] hover:bg-[#F4F8F6] rounded-xl transition-colors border border-transparent hover:border-[#D9E6DE] cursor-pointer"
+              aria-label="Private Notifications"
+              title="Personal Notifications & Alerts"
             >
-              <Bell className="w-4 h-4 text-slate-600" />
-              {pendingQueriesCount > 0 && (
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[#DC2626] rounded-full ring-2 ring-white" />
+              <Bell className="w-4 h-4 text-[#4D6D61]" />
+              {unreadNotificationCount > 0 && (
+                <span className="absolute top-1.5 right-1.5 min-w-[16px] h-4 px-1 bg-[#EF4444] text-white rounded-full text-[9px] font-bold flex items-center justify-center shadow-xs">
+                  {unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}
+                </span>
               )}
             </button>
 
             {showNotifications && (
-              <div className="absolute right-0 mt-1.5 w-80 sm:w-96 bg-white border border-[#E2E8F0] rounded-lg shadow-lg py-2 z-50 animate-in fade-in duration-100">
-                <div className="px-4 py-2 border-b border-slate-100 flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                    Institutional Circulars & Alerts
-                  </span>
-                  <span className="text-[10px] font-semibold text-[#4F46E5] bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
-                    {recentNotifications.length} Active
-                  </span>
+              <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white border border-[#D9E6DE] rounded-2xl shadow-xl py-2 z-50 animate-in fade-in duration-100">
+                <div className="px-4 py-2.5 border-b border-[#EAF0EC] flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-[#14382C] uppercase tracking-wider">
+                      Private Notifications
+                    </span>
+                    {unreadNotificationCount > 0 && (
+                      <span className="text-[10px] font-bold text-red-700 bg-red-50 px-2 py-0.5 rounded-full border border-red-200">
+                        {unreadNotificationCount} New
+                      </span>
+                    )}
+                  </div>
+                  {unreadNotificationCount > 0 && (
+                    <button
+                      onClick={() => markAllNotificationsRead()}
+                      className="text-[10px] font-bold text-[#166E52] hover:underline cursor-pointer"
+                    >
+                      Mark all read
+                    </button>
+                  )}
                 </div>
-                <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
-                  {recentNotifications.map(item => (
-                    <div key={item.id} className="p-3 hover:bg-slate-50 transition-colors">
-                      <div className="flex items-start gap-2">
-                        <span className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${
-                          item.category === 'urgent' ? 'bg-[#DC2626]' :
-                          item.category === 'exam' ? 'bg-[#F59E0B]' : 'bg-[#4F46E5]'
-                        }`} />
-                        <div>
-                          <p className="text-xs font-semibold text-slate-800 line-clamp-1">
-                            {item.title}
-                          </p>
-                          <p className="text-[11px] text-slate-500 line-clamp-2 mt-0.5">
-                            {item.content}
-                          </p>
-                          <span className="text-[10px] text-slate-400 mt-1 inline-block">
-                            {item.date} • {item.authorRole}
-                          </span>
-                        </div>
-                      </div>
+
+                <div className="divide-y divide-[#EAF0EC] max-h-80 overflow-y-auto custom-scrollbar">
+                  {notifications.length === 0 ? (
+                    <div className="p-6 text-center text-[#6F8B7F]">
+                      <Bell className="w-6 h-6 mx-auto mb-2 text-slate-300" />
+                      <p className="text-xs font-medium">No personal notifications</p>
+                      <p className="text-[10px] text-slate-400 mt-0.5">
+                        Direct query replies, attendance updates, and timetable changes will appear here privately.
+                      </p>
                     </div>
-                  ))}
+                  ) : (
+                    notifications.map(item => {
+                      const isUnread = !item.isRead;
+                      return (
+                        <div
+                          key={item.id}
+                          onClick={() => {
+                            if (isUnread) markNotificationRead(item.id);
+                          }}
+                          className={`p-3.5 transition-colors cursor-pointer ${
+                            isUnread ? 'bg-[#F4F9F6] hover:bg-[#EAF4EE]' : 'hover:bg-[#F9FBFA]'
+                          }`}
+                        >
+                          <div className="flex items-start gap-2.5">
+                            <span
+                              className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${
+                                item.type === 'alert' || (item.type as any) === 'error'
+                                  ? 'bg-[#EF4444]'
+                                  : item.type === 'warning'
+                                  ? 'bg-[#F59E0B]'
+                                  : item.type === 'success'
+                                  ? 'bg-[#10B981]'
+                                  : 'bg-[#1B8B67]'
+                              }`}
+                            />
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between gap-1">
+                                <p className={`text-xs truncate ${isUnread ? 'font-bold text-[#14382C]' : 'font-medium text-slate-700'}`}>
+                                  {item.title}
+                                </p>
+                                {isUnread && (
+                                  <span className="w-1.5 h-1.5 rounded-full bg-[#1B8B67] shrink-0" />
+                                )}
+                              </div>
+                              <p className="text-[11px] text-[#4D6D61] mt-0.5 line-clamp-2">
+                                {item.message}
+                              </p>
+                              <div className="flex items-center justify-between mt-1 text-[10px] text-[#6F8B7F]">
+                                <span>{item.senderName ? `From: ${item.senderName}` : 'System'}</span>
+                                <span>{item.createdAt ? String(item.createdAt).slice(0, 16).replace('T', ' ') : ''}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
+
+                {recentNotifications.length > 0 && (
+                  <div className="px-4 py-2 border-t border-[#EAF0EC] bg-[#FAFCFA] flex items-center justify-between text-[11px]">
+                    <span className="text-[#6F8B7F]">Institutional Circulars:</span>
+                    <span className="font-semibold text-[#166E52]">{recentNotifications.length} active announcements</span>
+                  </div>
+                )}
               </div>
             )}
           </div>
 
-          {/* User Profile Dropdown */}
+          {/* User Profile Dropdown matching reference */}
           <div className="relative" ref={profileMenuRef}>
             <button
               onClick={() => setShowProfileMenu(!showProfileMenu)}
-              className="flex items-center gap-2 p-1 rounded-md hover:bg-slate-50 transition-colors border border-transparent hover:border-[#E2E8F0]"
+              className="flex items-center gap-2.5 p-1 rounded-xl hover:bg-[#F4F8F6] transition-colors border border-transparent hover:border-[#D9E6DE] cursor-pointer"
             >
-              <div className="w-8 h-8 rounded-full bg-[#0F172A] text-white flex items-center justify-center font-bold text-xs shrink-0 tracking-wider">
+              <div className="w-8 h-8 rounded-full bg-[#0E2920] text-white flex items-center justify-center font-bold text-xs shrink-0 tracking-wider shadow-xs">
                 {getInitials(currentUser.name)}
               </div>
               <div className="hidden sm:block text-left max-w-[130px]">
-                <p className="text-xs font-bold text-[#0F172A] truncate leading-tight">
+                <p className="text-xs font-bold text-[#14382C] truncate leading-tight">
                   {currentUser.name}
                 </p>
-                <p className="text-[10px] text-slate-500 font-medium truncate">
-                  {isSimulatingRole ? `Preview: ${currentRole.toUpperCase()}` : (currentUser.designation || currentUser.role.toUpperCase())}
+                <p className="text-[10px] text-[#6F8B7F] font-medium truncate capitalize">
+                  {isSimulatingRole ? `Preview: ${currentRole}` : (currentUser.designation || currentUser.role)}
                 </p>
               </div>
-              <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+              <ChevronDown className="w-3.5 h-3.5 text-[#6F8B7F]" />
             </button>
 
             {showProfileMenu && (
-              <div className="absolute right-0 mt-1.5 w-68 bg-white border border-[#E2E8F0] rounded-lg shadow-lg py-2 z-50 animate-in fade-in duration-100">
-                <div className="px-4 py-2.5 border-b border-slate-100">
-                  <p className="text-xs font-bold text-[#0F172A]">{currentUser.name}</p>
-                  <p className="text-[11px] text-slate-500 truncate">{currentUser.email}</p>
+              <div className="absolute right-0 mt-2 w-68 bg-white border border-[#D9E6DE] rounded-2xl shadow-xl py-2 z-50 animate-in fade-in duration-100">
+                <div className="px-4 py-2.5 border-b border-[#EAF0EC]">
+                  <p className="text-xs font-bold text-[#14382C]">{currentUser.name}</p>
+                  <p className="text-[11px] text-[#6F8B7F] truncate">{currentUser.email}</p>
                   <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
-                    <span className="text-[10px] px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-semibold border border-slate-200 uppercase">
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#EAF5EF] text-[#166E52] font-semibold border border-[#CDE5D7] uppercase">
                       {currentUser.role.replace('_', ' ')}
                     </span>
                     {isSimulatingRole && (
-                      <span className="text-[10px] px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-bold border border-amber-300 uppercase">
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#FEF3C7] text-[#92400E] font-bold border border-[#FDE68A] uppercase">
                         Preview: {currentRole}
                       </span>
                     )}
-                    <span className="text-[10px] text-slate-500 font-mono">
+                    <span className="text-[10px] text-[#6F8B7F] font-mono">
                       {currentUser.regId}
                     </span>
                   </div>
@@ -377,9 +433,9 @@ export const Header: React.FC<HeaderProps> = ({
                         setShowProfileMenu(false);
                         returnToAdmin();
                       }}
-                      className="w-full px-4 py-2 text-xs text-left font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100/80 flex items-center gap-2 border-b border-amber-200/60 transition-colors"
+                      className="w-full px-4 py-2 text-xs text-left font-semibold text-[#92400E] bg-[#FEF3C7]/60 hover:bg-[#FEF3C7] flex items-center gap-2 border-b border-[#FDE68A] transition-colors"
                     >
-                      <RotateCcw className="w-3.5 h-3.5 text-amber-600" />
+                      <RotateCcw className="w-3.5 h-3.5 text-[#B45309]" />
                       Exit Simulation → Admin View
                     </button>
                   )}
@@ -388,9 +444,9 @@ export const Header: React.FC<HeaderProps> = ({
                       setShowProfileMenu(false);
                       onNavigateToProfile();
                     }}
-                    className="w-full px-4 py-2 text-xs text-left font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                    className="w-full px-4 py-2 text-xs text-left font-medium text-[#14382C] hover:bg-[#F4F8F6] flex items-center gap-2 cursor-pointer"
                   >
-                    <UserCheck className="w-3.5 h-3.5 text-slate-400" />
+                    <UserCheck className="w-3.5 h-3.5 text-[#6F8B7F]" />
                     Official Academic Profile
                   </button>
                   <button
@@ -398,16 +454,16 @@ export const Header: React.FC<HeaderProps> = ({
                       setShowProfileMenu(false);
                       logout();
                     }}
-                    className="w-full px-4 py-2 text-xs text-left font-medium text-red-600 hover:bg-red-50 flex items-center gap-2 transition-colors"
+                    className="w-full px-4 py-2 text-xs text-left font-medium text-red-600 hover:bg-red-50 flex items-center gap-2 transition-colors cursor-pointer"
                   >
                     <LogOut className="w-3.5 h-3.5 text-red-500" />
                     Sign Out
                   </button>
                 </div>
 
-                <div className="border-t border-slate-100 pt-1.5 px-4 pb-1">
-                  <span className="text-[10px] text-emerald-700 font-medium flex items-center gap-1">
-                    <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+                <div className="border-t border-[#EAF0EC] pt-2 px-4 pb-1">
+                  <span className="text-[10px] text-[#1B6E52] font-semibold flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-[#10B981]" />
                     Institutional Identity Verified
                   </span>
                 </div>
